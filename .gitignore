@@ -1,0 +1,13 @@
+node_modules/
+dist/
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+!data/.gitkeep
+test-results/
+playwright-report/
+.env
+.env.local
+.DS_Store
+Thumbs.db
