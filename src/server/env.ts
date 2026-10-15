@@ -9,7 +9,7 @@
  */
 
 export function isRemoteDatabase(): boolean {
-  const url = (process.env.DATABASE_URL || '').trim();
+  const url = (process.env.DATABASE_URL || process.env.TURSO_DATABASE_URL || '').trim();
   if (!url) return false;
   if (url.startsWith('file:') || url === ':memory:') return false;
   return true;

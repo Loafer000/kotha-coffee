@@ -18,8 +18,8 @@ export function getDbClient(): Client {
     return clientInstance;
   }
 
-  const rawUrl = process.env.DATABASE_URL;
-  const authToken = process.env.DATABASE_AUTH_TOKEN;
+  const rawUrl = process.env.DATABASE_URL || process.env.TURSO_DATABASE_URL;
+  const authToken = process.env.DATABASE_AUTH_TOKEN || process.env.TURSO_AUTH_TOKEN;
 
   if (!rawUrl || rawUrl.trim() === '' || rawUrl.startsWith('file:') || rawUrl === ':memory:') {
     let fileUrl: string;
