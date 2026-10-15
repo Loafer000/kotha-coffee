@@ -212,41 +212,33 @@ async function processOrderItems(rawItems: any[], db: any): Promise<{
   return { processedItems, totalAmount };
 }
 
-/**
- * Atomically increments and retrieves the daily sequence counter for the given date_key.
- */
 async function getNextDailyOrderNumber(db: any, dateKey: string): Promise<number> {
-  // Use RETURNING last_number with atomic upsert
-  try {
-    const counterRes = await db.execute({
+  // Query current maximum order number for today
+  const maxRes = await db.execute({
+    sql: `SELECT COALESCE(MAX(daily_order_number), 0) as max_num FROM orders WHERE date_key = ?;`,
+    args: [dateKey]
+  });
+  const currentMax = Number(maxRes.rows[0]?.max_num || 0);
+
+  if (currentMax === 0) {
+    await db.execute({
       sql: `INSERT INTO daily_counters (date_key, last_number)
             VALUES (?, 1)
-            ON CONFLICT(date_key) DO UPDATE SET last_number = daily_counters.last_number + 1
-            RETURNING last_number;`,
+            ON CONFLICT(date_key) DO UPDATE SET last_number = 1;`,
       args: [dateKey]
     });
-
-    if (counterRes.rows && counterRes.rows.length > 0 && counterRes.rows[0].last_number !== undefined) {
-      return Number(counterRes.rows[0].last_number);
-    }
-  } catch {
-    // If RETURNING not supported or transient error, fallback to query
+    return 1;
   }
 
-  // Fallback: update and select in sequence
+  const nextNumber = currentMax + 1;
   await db.execute({
     sql: `INSERT INTO daily_counters (date_key, last_number)
-          VALUES (?, 1)
-          ON CONFLICT(date_key) DO UPDATE SET last_number = daily_counters.last_number + 1;`,
-    args: [dateKey]
+          VALUES (?, ?)
+          ON CONFLICT(date_key) DO UPDATE SET last_number = ?;`,
+    args: [dateKey, nextNumber, nextNumber]
   });
 
-  const selectRes = await db.execute({
-    sql: `SELECT last_number FROM daily_counters WHERE date_key = ?;`,
-    args: [dateKey]
-  });
-
-  return Number(selectRes.rows[0].last_number);
+  return nextNumber;
 }
 
 /**
@@ -584,12 +576,22 @@ async function handleSettleOrder(req: AuthenticatedRequest, res: Response) {
     const cafeReq = req as CafeRequest;
     const nowIso = (cafeReq.cafeTime || getCafeNow(req)).toISOString();
 
-    await db.execute({
-      sql: `UPDATE orders
-            SET status = 'SETTLED', settled_at = ?, updated_at = ?
-            WHERE id = ?;`,
-      args: [nowIso, nowIso, orderId]
-    });
+    const paymentMethod = req.body?.paymentMethod || req.body?.payment_method;
+    if (paymentMethod && ['Cash', 'UPI', 'Card'].includes(paymentMethod)) {
+      await db.execute({
+        sql: `UPDATE orders
+              SET status = 'SETTLED', payment_method = ?, settled_at = ?, updated_at = ?
+              WHERE id = ?;`,
+        args: [paymentMethod, nowIso, nowIso, orderId]
+      });
+    } else {
+      await db.execute({
+        sql: `UPDATE orders
+              SET status = 'SETTLED', settled_at = ?, updated_at = ?
+              WHERE id = ?;`,
+        args: [nowIso, nowIso, orderId]
+      });
+    }
 
     const updatedOrderRes = await db.execute({
       sql: `SELECT * FROM orders WHERE id = ?;`,
@@ -616,7 +618,8 @@ router.post('/:id/settle', requireReceptionAuth, handleSettleOrder);
 /**
  * DELETE /api/orders/:id
  * Protected by requireReceptionAuth.
- * Cancels order (status = 'CANCELLED'). Excludes it from pending queues.
+ * Deletes/cancels order and synchronizes the daily order number counter
+ * so that if order #1 is deleted, the next order reuses #1.
  * Rejects with 409 if order is already settled.
  */
 router.delete('/:id', requireReceptionAuth, async (req: AuthenticatedRequest, res: Response) => {
@@ -638,21 +641,37 @@ router.delete('/:id', requireReceptionAuth, async (req: AuthenticatedRequest, re
       return res.status(409).json({ error: 'Cannot cancel a settled order' });
     }
 
-    const cafeReq = req as CafeRequest;
-    const nowIso = (cafeReq.cafeTime || getCafeNow(req)).toISOString();
+    const dateKey = String(order.date_key);
+
+    // Delete associated line items
+    await db.execute({
+      sql: `DELETE FROM order_items WHERE order_id = ?;`,
+      args: [orderId]
+    });
+
+    // Delete order row completely so order number can be reused
+    await db.execute({
+      sql: `DELETE FROM orders WHERE id = ?;`,
+      args: [orderId]
+    });
+
+    // Resynchronize daily counter to highest remaining order number for today
+    const maxRes = await db.execute({
+      sql: `SELECT COALESCE(MAX(daily_order_number), 0) as max_num FROM orders WHERE date_key = ?;`,
+      args: [dateKey]
+    });
+    const newMax = Number(maxRes.rows[0]?.max_num || 0);
 
     await db.execute({
-      sql: `UPDATE orders
-            SET status = 'CANCELLED', updated_at = ?
-            WHERE id = ?;`,
-      args: [nowIso, orderId]
+      sql: `UPDATE daily_counters SET last_number = ? WHERE date_key = ?;`,
+      args: [newMax, dateKey]
     });
 
     broadcastOrderEvent({ type: 'order:cancelled', orderId });
 
     return res.status(200).json({
       success: true,
-      message: 'Order cancelled',
+      message: 'Order deleted and sequence synchronized',
       id: orderId,
       status: 'CANCELLED'
     });

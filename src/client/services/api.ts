@@ -322,15 +322,21 @@ export async function updateOrder(
 }
 
 /**
- * Marks an order as Done (moves from PENDING to SETTLED).
+ * Marks an order as Done (moves from PENDING to SETTLED) with selected payment method.
  */
-export async function settleOrder(id: string, token?: string): Promise<Order> {
+export async function settleOrder(
+  id: string,
+  token?: string,
+  paymentMethod?: 'Cash' | 'UPI' | 'Card'
+): Promise<Order> {
   const authToken = token || getStoredToken();
   const res = await fetch(`/api/orders/${encodeURIComponent(id)}/done`, {
     method: 'POST',
     headers: {
+      'Content-Type': 'application/json',
       ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
-    }
+    },
+    body: JSON.stringify({ paymentMethod: paymentMethod || 'Cash' })
   });
 
   if (!res.ok) {

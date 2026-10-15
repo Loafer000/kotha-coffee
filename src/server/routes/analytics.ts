@@ -221,8 +221,12 @@ router.get('/', requireReceptionAuth, async (req: AuthenticatedRequest, res: Res
 
 /**
  * GET /api/analytics/export
- * Downloads the selected day's detailed analysis as an Excel (.xlsx) spreadsheet.
- * Guarded by requireReceptionAuth.
+ * Downloads the selected day's analysis as an Excel spreadsheet.
+ * Shows:
+ * - Date
+ * - Total Items Sold & Overall Revenue
+ * - Table: Item Name, Category, Price (₹), Quantity Sold, Total Revenue (₹)
+ * - Bottom Total Row
  */
 router.get('/export', requireReceptionAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -240,66 +244,29 @@ router.get('/export', requireReceptionAuth, async (req: AuthenticatedRequest, re
     workbook.creator = 'Kotha & Coffee POS';
     workbook.created = new Date();
 
-    // 1. Sheet: Daily Summary
-    const summarySheet = workbook.addWorksheet('Daily Summary');
-    summarySheet.mergeCells('A1:C1');
-    const titleCell = summarySheet.getCell('A1');
+    const sheet = workbook.addWorksheet('Daily Sales Report');
+
+    // Title Row
+    sheet.mergeCells('A1:E1');
+    const titleCell = sheet.getCell('A1');
     titleCell.value = 'Kotha & Coffee (কথা & Coffee) — Daily Sales Report';
     titleCell.font = { bold: true, size: 14, color: { argb: 'FF3E2723' } };
     titleCell.alignment = { horizontal: 'center' };
 
-    summarySheet.mergeCells('A2:C2');
-    const dateCell = summarySheet.getCell('A2');
-    dateCell.value = `Date: ${targetDate} (Asia/Kolkata Timezone)`;
-    dateCell.font = { italic: true, size: 10, color: { argb: 'FF8D493A' } };
+    // Date Row
+    sheet.mergeCells('A2:E2');
+    const dateCell = sheet.getCell('A2');
+    dateCell.value = `Date: ${targetDate}`;
+    dateCell.font = { bold: true, size: 11, color: { argb: 'FF8D493A' } };
     dateCell.alignment = { horizontal: 'center' };
 
-    summarySheet.addRow([]);
-
-    const summaryHeader = summarySheet.addRow(['Metric', 'Details', 'Amount (₹) / Count']);
-    styleHeaderRow(summaryHeader);
-
-    const summaryResult = await db.execute({
-      sql: `SELECT COUNT(*) as order_count, COALESCE(SUM(total_amount), 0) as grand_total FROM orders WHERE status = 'SETTLED' AND date_key = ?;`,
-      args: [targetDate]
-    });
-    const orderCount = Number(summaryResult.rows[0]?.order_count || 0);
-    const grandTotal = Math.round(Number(summaryResult.rows[0]?.grand_total || 0) * 100) / 100;
-    const avgOrder = orderCount > 0 ? Math.round((grandTotal / orderCount) * 100) / 100 : 0;
-
-    const paymentResult = await db.execute({
-      sql: `SELECT payment_method, COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total FROM orders WHERE status = 'SETTLED' AND date_key = ? GROUP BY payment_method;`,
-      args: [targetDate]
-    });
-
-    let cashTotal = 0, cashCount = 0, upiTotal = 0, upiCount = 0, cardTotal = 0, cardCount = 0;
-    for (const row of paymentResult.rows) {
-      const m = String(row.payment_method || '').toLowerCase();
-      const count = Number(row.count || 0);
-      const total = Math.round(Number(row.total || 0) * 100) / 100;
-      if (m === 'cash') { cashTotal += total; cashCount += count; }
-      else if (m === 'upi') { upiTotal += total; upiCount += count; }
-      else if (m === 'card') { cardTotal += total; cardCount += count; }
-    }
-
-    summarySheet.addRow(['Gross Revenue', 'Total settled sales for the day', grandTotal]);
-    summarySheet.addRow(['Settled Orders', 'Completed tickets fulfilled', orderCount]);
-    summarySheet.addRow(['Average Order Value', 'Average per settled ticket', avgOrder]);
-    summarySheet.addRow(['Cash Sales', `${cashCount} orders fulfilled via Cash`, cashTotal]);
-    summarySheet.addRow(['UPI Sales', `${upiCount} orders fulfilled via UPI (GPay/PhonePe)`, upiTotal]);
-    summarySheet.addRow(['Card Sales', `${cardCount} orders fulfilled via Card`, cardTotal]);
-    autoFitColumns(summarySheet);
-
-    // 2. Sheet: Itemized Sales Breakdown
-    const itemSheet = workbook.addWorksheet('Itemized Sales');
-    const itemHeader = itemSheet.addRow(['Item Name', 'Category', 'Quantity Sold', 'Revenue (₹)', '% of Day Total']);
-    styleHeaderRow(itemHeader);
-
+    // Query item sales for target date
     const itemResult = await db.execute({
       sql: `
         SELECT 
           oi.item_name,
           COALESCE((SELECT category FROM menu_items WHERE id = oi.menu_item_id OR name = oi.item_name LIMIT 1), 'General') as category,
+          MAX(oi.unit_price) as unit_price,
           SUM(oi.quantity) as total_quantity,
           SUM(oi.subtotal) as total_revenue
         FROM order_items oi
@@ -311,71 +278,62 @@ router.get('/export', requireReceptionAuth, async (req: AuthenticatedRequest, re
       args: [targetDate]
     });
 
+    let overallRevenue = 0;
+    let totalItemsQuantity = 0;
+
     for (const r of itemResult.rows) {
+      overallRevenue += Number(r.total_revenue || 0);
+      totalItemsQuantity += Number(r.total_quantity || 0);
+    }
+    overallRevenue = Math.round(overallRevenue * 100) / 100;
+
+    // KPI Summary Row
+    sheet.mergeCells('A3:E3');
+    const kpiCell = sheet.getCell('A3');
+    kpiCell.value = `Total Items Sold: ${totalItemsQuantity}  |  Overall Revenue: ₹${overallRevenue}`;
+    kpiCell.font = { bold: true, size: 11, color: { argb: 'FF1B5E20' } };
+    kpiCell.alignment = { horizontal: 'center' };
+
+    sheet.addRow([]); // Blank line
+
+    // Table Header
+    const headerRow = sheet.addRow(['Item Name', 'Category', 'Price (₹)', 'Quantity Sold', 'Total Revenue (₹)']);
+    styleHeaderRow(headerRow);
+
+    for (const r of itemResult.rows) {
+      const price = Number(r.unit_price || 0);
+      const qty = Number(r.total_quantity || 0);
       const rev = Math.round(Number(r.total_revenue || 0) * 100) / 100;
-      const pct = grandTotal > 0 ? (rev / grandTotal) * 100 : 0;
-      itemSheet.addRow([
+      sheet.addRow([
         String(r.item_name),
         String(r.category || 'General'),
-        Number(r.total_quantity || 0),
-        rev,
-        `${pct.toFixed(1)}%`
+        price,
+        qty,
+        rev
       ]);
     }
-    autoFitColumns(itemSheet);
 
-    // 3. Sheet: Order Transactions
-    const txSheet = workbook.addWorksheet('Transactions');
-    const txHeader = txSheet.addRow(['Order #', 'Time (IST)', 'Payment Method', 'Total (₹)', 'Items Ordered', 'Notes']);
-    styleHeaderRow(txHeader);
-
-    const ordersResult = await db.execute({
-      sql: `
-        SELECT 
-          o.id,
-          o.daily_order_number,
-          o.created_at,
-          o.payment_method,
-          o.total_amount,
-          o.notes
-        FROM orders o
-        WHERE o.status = 'SETTLED' AND o.date_key = ?
-        ORDER BY o.daily_order_number ASC;
-      `,
-      args: [targetDate]
+    // Bottom Total Row
+    const totalRow = sheet.addRow(['TOTAL', '', '', totalItemsQuantity, overallRevenue]);
+    totalRow.height = 22;
+    totalRow.eachCell((cell) => {
+      cell.font = { bold: true, size: 11, color: { argb: 'FF3E2723' } };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFF5EBE1' }
+      };
+      cell.border = {
+        top: { style: 'medium', color: { argb: 'FF3E2723' } },
+        bottom: { style: 'double', color: { argb: 'FF3E2723' } }
+      };
     });
 
-    for (const ord of ordersResult.rows) {
-      const itemsRes = await db.execute({
-        sql: `SELECT quantity, item_name, subtotal FROM order_items WHERE order_id = ?;`,
-        args: [String(ord.id)]
-      });
-      const itemsSummary = itemsRes.rows.map(it => `${it.quantity}x ${it.item_name}`).join(', ');
-
-      let formattedTime = String(ord.created_at);
-      try {
-        formattedTime = new Intl.DateTimeFormat('en-IN', {
-          timeZone: 'Asia/Kolkata',
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: true
-        }).format(new Date(String(ord.created_at)));
-      } catch {}
-
-      txSheet.addRow([
-        `#${ord.daily_order_number}`,
-        formattedTime,
-        String(ord.payment_method),
-        Number(ord.total_amount || 0),
-        itemsSummary || 'N/A',
-        String(ord.notes || '')
-      ]);
-    }
-    autoFitColumns(txSheet);
+    autoFitColumns(sheet);
 
     const buffer = await workbook.xlsx.writeBuffer();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="kotha-coffee-report-${targetDate}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="kotha-coffee-sales-${targetDate}.xlsx"`);
     return res.send(Buffer.from(buffer));
   } catch (err: any) {
     console.error('[Export Daily Excel Error]', err);
@@ -385,8 +343,12 @@ router.get('/export', requireReceptionAuth, async (req: AuthenticatedRequest, re
 
 /**
  * GET /api/analytics/export-overall
- * Downloads all-time cumulative analytics across all dates as an Excel (.xlsx) spreadsheet.
- * Guarded by requireReceptionAuth.
+ * Downloads all-time cumulative analytics as an Excel spreadsheet.
+ * Shows:
+ * - Mentioning the date range (minDate to maxDate)
+ * - Total Items Sold & Overall Lifetime Revenue
+ * - Table: Item Name, Category, Price (₹), Total Quantity Sold, Total Revenue (₹)
+ * - Bottom Total Row
  */
 router.get('/export-overall', requireReceptionAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -395,96 +357,42 @@ router.get('/export-overall', requireReceptionAuth, async (req: AuthenticatedReq
     workbook.creator = 'Kotha & Coffee POS';
     workbook.created = new Date();
 
-    // 1. Sheet: Overall Lifetime Summary
-    const summarySheet = workbook.addWorksheet('Lifetime Summary');
-    summarySheet.mergeCells('A1:C1');
-    const titleCell = summarySheet.getCell('A1');
-    titleCell.value = 'Kotha & Coffee (কথা & Coffee) — Overall Lifetime Analysis';
-    titleCell.font = { bold: true, size: 14, color: { argb: 'FF3E2723' } };
-    titleCell.alignment = { horizontal: 'center' };
+    const sheet = workbook.addWorksheet('Overall Sales Report');
 
-    summarySheet.addRow([]);
-
-    const summaryHeader = summarySheet.addRow(['Metric', 'Details', 'Lifetime Total']);
-    styleHeaderRow(summaryHeader);
-
-    const overallRes = await db.execute(`
+    // Query date range
+    const rangeRes = await db.execute(`
       SELECT 
-        COUNT(*) as total_orders,
-        COALESCE(SUM(total_amount), 0) as total_revenue,
+        COALESCE(MIN(date_key), 'N/A') as min_date,
+        COALESCE(MAX(date_key), 'N/A') as max_date,
         COUNT(DISTINCT date_key) as total_days
       FROM orders
       WHERE status = 'SETTLED';
     `);
 
-    const totalOrders = Number(overallRes.rows[0]?.total_orders || 0);
-    const totalRevenue = Math.round(Number(overallRes.rows[0]?.total_revenue || 0) * 100) / 100;
-    const totalDays = Number(overallRes.rows[0]?.total_days || 0);
-    const avgOrderVal = totalOrders > 0 ? Math.round((totalRevenue / totalOrders) * 100) / 100 : 0;
-    const avgDailyRev = totalDays > 0 ? Math.round((totalRevenue / totalDays) * 100) / 100 : 0;
+    const minDate = String(rangeRes.rows[0]?.min_date || 'N/A');
+    const maxDate = String(rangeRes.rows[0]?.max_date || 'N/A');
+    const totalDays = Number(rangeRes.rows[0]?.total_days || 0);
 
-    summarySheet.addRow(['Lifetime Gross Revenue', 'Cumulative settled sales', `₹${totalRevenue}`]);
-    summarySheet.addRow(['Total Settled Orders', 'Total tickets completed', totalOrders]);
-    summarySheet.addRow(['Total Operating Days', 'Days with recorded sales', totalDays]);
-    summarySheet.addRow(['Average Order Value', 'Average revenue per customer ticket', `₹${avgOrderVal}`]);
-    summarySheet.addRow(['Average Daily Revenue', 'Average revenue per operating day', `₹${avgDailyRev}`]);
+    // Title Row
+    sheet.mergeCells('A1:E1');
+    const titleCell = sheet.getCell('A1');
+    titleCell.value = 'Kotha & Coffee (কথা & Coffee) — Overall Sales Report';
+    titleCell.font = { bold: true, size: 14, color: { argb: 'FF3E2723' } };
+    titleCell.alignment = { horizontal: 'center' };
 
-    const payRes = await db.execute(`
-      SELECT payment_method, COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
-      FROM orders
-      WHERE status = 'SETTLED'
-      GROUP BY payment_method;
-    `);
+    // Dates Row
+    sheet.mergeCells('A2:E2');
+    const dateCell = sheet.getCell('A2');
+    dateCell.value = `Dates: From ${minDate} to ${maxDate} (${totalDays} Active Days)`;
+    dateCell.font = { bold: true, size: 11, color: { argb: 'FF8D493A' } };
+    dateCell.alignment = { horizontal: 'center' };
 
-    for (const r of payRes.rows) {
-      summarySheet.addRow([
-        `Lifetime ${r.payment_method} Sales`,
-        `${r.count} orders paid via ${r.payment_method}`,
-        `₹${Math.round(Number(r.total || 0) * 100) / 100}`
-      ]);
-    }
-    autoFitColumns(summarySheet);
-
-    // 2. Sheet: Daily Breakdown
-    const dailySheet = workbook.addWorksheet('Daily Breakdown');
-    const dailyHeader = dailySheet.addRow(['Date', 'Settled Orders', 'Cash (₹)', 'UPI (₹)', 'Card (₹)', 'Day Total (₹)']);
-    styleHeaderRow(dailyHeader);
-
-    const dailyRes = await db.execute(`
-      SELECT 
-        date_key,
-        COUNT(*) as order_count,
-        COALESCE(SUM(CASE WHEN LOWER(payment_method) = 'cash' THEN total_amount ELSE 0 END), 0) as cash_total,
-        COALESCE(SUM(CASE WHEN LOWER(payment_method) = 'upi' THEN total_amount ELSE 0 END), 0) as upi_total,
-        COALESCE(SUM(CASE WHEN LOWER(payment_method) = 'card' THEN total_amount ELSE 0 END), 0) as card_total,
-        COALESCE(SUM(total_amount), 0) as day_total
-      FROM orders
-      WHERE status = 'SETTLED'
-      GROUP BY date_key
-      ORDER BY date_key DESC;
-    `);
-
-    for (const r of dailyRes.rows) {
-      dailySheet.addRow([
-        String(r.date_key),
-        Number(r.order_count || 0),
-        Math.round(Number(r.cash_total || 0) * 100) / 100,
-        Math.round(Number(r.upi_total || 0) * 100) / 100,
-        Math.round(Number(r.card_total || 0) * 100) / 100,
-        Math.round(Number(r.day_total || 0) * 100) / 100
-      ]);
-    }
-    autoFitColumns(dailySheet);
-
-    // 3. Sheet: All-Time Top Selling Items
-    const itemsSheet = workbook.addWorksheet('Top Selling Items');
-    const itemsHeader = itemsSheet.addRow(['Item Name', 'Category', 'Total Units Sold', 'Lifetime Revenue (₹)', '% of Lifetime Revenue']);
-    styleHeaderRow(itemsHeader);
-
-    const itemsRes = await db.execute(`
+    // Query all items sold across all settled orders
+    const itemResult = await db.execute(`
       SELECT 
         oi.item_name,
         COALESCE((SELECT category FROM menu_items WHERE id = oi.menu_item_id OR name = oi.item_name LIMIT 1), 'General') as category,
+        MAX(oi.unit_price) as unit_price,
         SUM(oi.quantity) as total_quantity,
         SUM(oi.subtotal) as total_revenue
       FROM order_items oi
@@ -494,22 +402,62 @@ router.get('/export-overall', requireReceptionAuth, async (req: AuthenticatedReq
       ORDER BY total_revenue DESC, total_quantity DESC;
     `);
 
-    for (const r of itemsRes.rows) {
+    let overallRevenue = 0;
+    let totalItemsQuantity = 0;
+
+    for (const r of itemResult.rows) {
+      overallRevenue += Number(r.total_revenue || 0);
+      totalItemsQuantity += Number(r.total_quantity || 0);
+    }
+    overallRevenue = Math.round(overallRevenue * 100) / 100;
+
+    // KPI Summary Row
+    sheet.mergeCells('A3:E3');
+    const kpiCell = sheet.getCell('A3');
+    kpiCell.value = `Total Items Sold: ${totalItemsQuantity}  |  Overall Revenue: ₹${overallRevenue}`;
+    kpiCell.font = { bold: true, size: 11, color: { argb: 'FF1B5E20' } };
+    kpiCell.alignment = { horizontal: 'center' };
+
+    sheet.addRow([]); // Blank line
+
+    // Table Header
+    const headerRow = sheet.addRow(['Item Name', 'Category', 'Price (₹)', 'Total Quantity Sold', 'Total Revenue (₹)']);
+    styleHeaderRow(headerRow);
+
+    for (const r of itemResult.rows) {
+      const price = Number(r.unit_price || 0);
+      const qty = Number(r.total_quantity || 0);
       const rev = Math.round(Number(r.total_revenue || 0) * 100) / 100;
-      const pct = totalRevenue > 0 ? (rev / totalRevenue) * 100 : 0;
-      itemsSheet.addRow([
+      sheet.addRow([
         String(r.item_name),
         String(r.category || 'General'),
-        Number(r.total_quantity || 0),
-        rev,
-        `${pct.toFixed(1)}%`
+        price,
+        qty,
+        rev
       ]);
     }
-    autoFitColumns(itemsSheet);
+
+    // Bottom Total Row
+    const totalRow = sheet.addRow(['TOTAL', '', '', totalItemsQuantity, overallRevenue]);
+    totalRow.height = 22;
+    totalRow.eachCell((cell) => {
+      cell.font = { bold: true, size: 11, color: { argb: 'FF3E2723' } };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFF5EBE1' }
+      };
+      cell.border = {
+        top: { style: 'medium', color: { argb: 'FF3E2723' } },
+        bottom: { style: 'double', color: { argb: 'FF3E2723' } }
+      };
+    });
+
+    autoFitColumns(sheet);
 
     const buffer = await workbook.xlsx.writeBuffer();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename="kotha-coffee-overall-report.xlsx"');
+    res.setHeader('Content-Disposition', 'attachment; filename="kotha-coffee-overall-sales.xlsx"');
     return res.send(Buffer.from(buffer));
   } catch (err: any) {
     console.error('[Export Overall Excel Error]', err);

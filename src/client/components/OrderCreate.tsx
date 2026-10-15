@@ -252,34 +252,6 @@ export const OrderCreate: React.FC<OrderCreateProps> = ({ onOrderPlaced }) => {
       {/* Sticky Bottom Order Bar */}
       <div className="fixed bottom-0 left-0 right-0 z-30 flex justify-center pointer-events-none">
         <div className="w-full max-w-[420px] bg-white border-t border-[#EADCC8] p-3 shadow-2xl pointer-events-auto">
-          {/* Payment Method Selector */}
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-[#5D4037]">Payment:</span>
-            <div className="flex space-x-1.5">
-              {(['Cash', 'UPI', 'Card'] as const).map((method) => {
-                const isSelected = paymentMethod === method;
-                return (
-                  <button
-                    key={method}
-                    type="button"
-                    onClick={() => setPaymentMethod(method)}
-                    data-testid={`pay-${method.toLowerCase()}`}
-                    className={`min-h-[44px] px-3 py-1.5 text-xs font-bold rounded-xl transition-all flex items-center space-x-1 border ${
-                      isSelected
-                        ? 'bg-[#3E2723] text-[#FFF8E7] border-[#3E2723] shadow-sm'
-                        : 'bg-[#FAF3E0] text-[#5D4037] border-[#D7CCC8] hover:bg-[#FFF8E7]'
-                    }`}
-                  >
-                    {method === 'Cash' && <Banknote className="w-3.5 h-3.5" />}
-                    {method === 'UPI' && <QrCode className="w-3.5 h-3.5" />}
-                    {method === 'Card' && <CreditCard className="w-3.5 h-3.5" />}
-                    <span>{method}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
           {/* Cart Summary & Submit Button */}
           <div className="flex items-center space-x-2">
             <div className="flex-1 bg-[#FAF3E0] rounded-xl px-3 py-2 border border-[#EADCC8] flex flex-col justify-center">
