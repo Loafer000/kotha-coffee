@@ -435,3 +435,67 @@ export async function getDailyAnalytics(
   return res.json();
 }
 
+/**
+ * Helper to trigger browser file download from Blob.
+ */
+function triggerBlobDownload(blob: Blob, filename: string) {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.style.display = 'none';
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  }, 100);
+}
+
+/**
+ * Downloads the selected date's Excel report (.xlsx).
+ */
+export async function downloadDailyExcelReport(
+  date?: string,
+  token?: string
+): Promise<void> {
+  const authToken = token || getStoredToken();
+  const query = date ? `?date=${encodeURIComponent(date)}` : '';
+  const res = await fetch(`/api/analytics/export${query}`, {
+    headers: {
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
+    }
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to download daily Excel report');
+  }
+
+  const blob = await res.blob();
+  const filename = `kotha-coffee-daily-report-${date || 'today'}.xlsx`;
+  triggerBlobDownload(blob, filename);
+}
+
+/**
+ * Downloads the overall cumulative Excel report (.xlsx) across all dates.
+ */
+export async function downloadOverallExcelReport(
+  token?: string
+): Promise<void> {
+  const authToken = token || getStoredToken();
+  const res = await fetch('/api/analytics/export-overall', {
+    headers: {
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
+    }
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to download overall Excel report');
+  }
+
+  const blob = await res.blob();
+  triggerBlobDownload(blob, 'kotha-coffee-overall-report.xlsx');
+}
+

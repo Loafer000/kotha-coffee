@@ -11,10 +11,15 @@ import {
   Banknote, 
   QrCode, 
   AlertCircle,
-  FolderOpen
+  FolderOpen,
+  FileSpreadsheet,
+  Download,
+  CheckCircle
 } from 'lucide-react';
 import { 
   getDailyAnalytics, 
+  downloadDailyExcelReport,
+  downloadOverallExcelReport,
   type DailyAnalytics, 
   type ItemSaleRecord 
 } from '../services/api.js';
@@ -90,6 +95,38 @@ export const Analytics: React.FC<AnalyticsProps> = ({ token }) => {
   const handleNextDay = () => setSelectedDate(shiftDate(selectedDate, 1));
   const handleToday = () => setSelectedDate(getTodayKolkata());
   const handleYesterday = () => setSelectedDate(shiftDate(getTodayKolkata(), -1));
+
+  const [downloadingDay, setDownloadingDay] = useState<boolean>(false);
+  const [downloadingOverall, setDownloadingOverall] = useState<boolean>(false);
+  const [downloadMsg, setDownloadMsg] = useState<string | null>(null);
+
+  const handleDownloadDayExcel = async () => {
+    setDownloadingDay(true);
+    setDownloadMsg(null);
+    try {
+      await downloadDailyExcelReport(selectedDate, token || undefined);
+      setDownloadMsg(`Day's report (${selectedDate}) downloaded!`);
+      setTimeout(() => setDownloadMsg(null), 4000);
+    } catch (err: any) {
+      setError(err.message || "Failed to download day's Excel report");
+    } finally {
+      setDownloadingDay(false);
+    }
+  };
+
+  const handleDownloadOverallExcel = async () => {
+    setDownloadingOverall(true);
+    setDownloadMsg(null);
+    try {
+      await downloadOverallExcelReport(token || undefined);
+      setDownloadMsg('Overall lifetime report downloaded!');
+      setTimeout(() => setDownloadMsg(null), 4000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to download overall Excel report');
+    } finally {
+      setDownloadingOverall(false);
+    }
+  };
 
   const grandTotal = data?.grandTotal ?? 0;
   const orderCount = data?.orderCount ?? 0;
@@ -193,6 +230,58 @@ export const Analytics: React.FC<AnalyticsProps> = ({ token }) => {
             }`}
           >
             <span>Yesterday</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Excel Reports Download Section */}
+      <div className="bg-white p-3 rounded-2xl border-2 border-[#EADCC8] shadow-sm space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-1.5 text-[#3E2723]">
+            <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
+            <span className="text-xs font-bold uppercase tracking-wide">Excel Reports</span>
+          </div>
+          <span className="text-[10px] text-[#8D6E63] font-medium">.xlsx Spreadsheets</span>
+        </div>
+
+        {downloadMsg && (
+          <div className="p-2 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs flex items-center space-x-1.5 animate-fade-in">
+            <CheckCircle className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
+            <span className="font-semibold text-[11px]">{downloadMsg}</span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-2">
+          {/* Download Selected Date's Report */}
+          <button
+            onClick={handleDownloadDayExcel}
+            disabled={downloadingDay}
+            data-testid="btn-download-day-excel"
+            title={`Download Excel report for ${selectedDate}`}
+            className="min-h-[44px] px-2.5 py-2 bg-[#FAF3E0] hover:bg-[#EADCC8] text-[#3E2723] border border-[#D7CCC8] rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 active:scale-95 transition-all disabled:opacity-60 shadow-sm"
+          >
+            {downloadingDay ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#8D493A]" />
+            ) : (
+              <Download className="w-3.5 h-3.5 text-[#8D493A]" />
+            )}
+            <span className="truncate">{downloadingDay ? 'Exporting...' : "Day's Report"}</span>
+          </button>
+
+          {/* Download All-Time Overall Report */}
+          <button
+            onClick={handleDownloadOverallExcel}
+            disabled={downloadingOverall}
+            data-testid="btn-download-overall-excel"
+            title="Download overall cumulative Excel report"
+            className="min-h-[44px] px-2.5 py-2 bg-[#3E2723] hover:bg-[#4E342E] text-[#FFF8E7] rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 active:scale-95 transition-all disabled:opacity-60 shadow-sm"
+          >
+            {downloadingOverall ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" />
+            ) : (
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+            )}
+            <span className="truncate">{downloadingOverall ? 'Exporting...' : 'Overall Report'}</span>
           </button>
         </div>
       </div>
