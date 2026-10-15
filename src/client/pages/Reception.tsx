@@ -66,6 +66,7 @@ export const Reception: React.FC = () => {
 
   // Settle Payment Selection Modal
   const [settlingOrder, setSettlingOrder] = useState<Order | null>(null);
+  const [settlePaymentMethod, setSettlePaymentMethod] = useState<'Cash' | 'UPI'>('Cash');
   const [settlingLoading, setSettlingLoading] = useState<boolean>(false);
 
   // Cancel Confirmation State
@@ -124,6 +125,8 @@ export const Reception: React.FC = () => {
   const handleMarkDone = (order: Order) => {
     // Open payment selection modal at the moment order is marked done
     setSettlingOrder(order);
+    const existing = order.payment_method || order.paymentMethod;
+    setSettlePaymentMethod(existing === 'UPI' ? 'UPI' : 'Cash');
   };
 
   const handleCompleteSettle = async (orderId: string, paymentMethod: 'Cash' | 'UPI' | 'Card') => {
@@ -725,7 +728,7 @@ export const Reception: React.FC = () => {
         </div>
       )}
 
-      {/* Settle Order Payment Method Modal (Choose payment when marking Done) */}
+      {/* Settle Order Payment Method Modal (Choose payment and confirm with tick mark submit) */}
       {settlingOrder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
           <div className="w-full max-w-[340px] bg-white rounded-3xl p-5 shadow-2xl border-2 border-[#EADCC8] text-center space-y-4">
@@ -735,10 +738,10 @@ export const Reception: React.FC = () => {
 
             <div>
               <h3 className="text-lg font-black text-[#3E2723]">
-                Complete Order #{settlingOrder.daily_order_number || settlingOrder.dailyOrderNumber || settlingOrder.order_number}
+                Confirm Order #{settlingOrder.daily_order_number || settlingOrder.dailyOrderNumber || settlingOrder.order_number}
               </h3>
               <p className="text-xs text-[#5D4037] mt-0.5">
-                Select payment method to mark Done:
+                Select payment method and confirm:
               </p>
               <div className="mt-2 py-2 px-5 bg-[#FAF3E0] rounded-xl border border-[#EADCC8] inline-block">
                 <span className="text-2xl font-black text-[#3E2723]">
@@ -747,51 +750,68 @@ export const Reception: React.FC = () => {
               </div>
             </div>
 
-            <div className="space-y-2 pt-1">
+            {/* Payment Method Selector: Cash or UPI only (Card removed) */}
+            <div className="grid grid-cols-2 gap-2.5 pt-1">
               <button
-                onClick={() => handleCompleteSettle(settlingOrder.id, 'Cash')}
-                disabled={settlingLoading}
+                type="button"
+                onClick={() => setSettlePaymentMethod('Cash')}
                 data-testid="settle-pay-cash"
-                className="w-full min-h-[48px] py-2.5 px-4 bg-[#FAF3E0] hover:bg-[#3E2723] hover:text-[#FFF8E7] text-[#3E2723] border border-[#D7CCC8] rounded-2xl font-bold text-sm flex items-center justify-between active:scale-98 transition-all shadow-sm"
+                className={`py-3 px-3 rounded-2xl border text-xs font-bold flex flex-col items-center justify-center space-y-1.5 transition-all active:scale-95 ${
+                  settlePaymentMethod === 'Cash'
+                    ? 'bg-[#3E2723] text-[#FFF8E7] border-[#3E2723] shadow-md ring-2 ring-[#3E2723]/20'
+                    : 'bg-[#FAF3E0] text-[#5D4037] border-[#D7CCC8] hover:bg-[#EADCC8]'
+                }`}
               >
-                <div className="flex items-center space-x-2.5">
-                  <Banknote className="w-5 h-5 text-emerald-700" />
-                  <span>Cash Payment</span>
+                <div className="flex items-center space-x-1.5">
+                  <Banknote className="w-4 h-4 text-emerald-500" />
+                  <span className="text-sm">Cash</span>
                 </div>
-                <span className="text-xs font-mono">₹{settlingOrder.total_amount || settlingOrder.totalAmount}</span>
+                {settlePaymentMethod === 'Cash' && (
+                  <span className="text-[10px] text-emerald-300 font-semibold flex items-center">
+                    <Check className="w-3 h-3 mr-0.5 stroke-[2.5]" /> Selected
+                  </span>
+                )}
               </button>
 
               <button
-                onClick={() => handleCompleteSettle(settlingOrder.id, 'UPI')}
-                disabled={settlingLoading}
+                type="button"
+                onClick={() => setSettlePaymentMethod('UPI')}
                 data-testid="settle-pay-upi"
-                className="w-full min-h-[48px] py-2.5 px-4 bg-[#FAF3E0] hover:bg-[#3E2723] hover:text-[#FFF8E7] text-[#3E2723] border border-[#D7CCC8] rounded-2xl font-bold text-sm flex items-center justify-between active:scale-98 transition-all shadow-sm"
+                className={`py-3 px-3 rounded-2xl border text-xs font-bold flex flex-col items-center justify-center space-y-1.5 transition-all active:scale-95 ${
+                  settlePaymentMethod === 'UPI'
+                    ? 'bg-[#3E2723] text-[#FFF8E7] border-[#3E2723] shadow-md ring-2 ring-[#3E2723]/20'
+                    : 'bg-[#FAF3E0] text-[#5D4037] border-[#D7CCC8] hover:bg-[#EADCC8]'
+                }`}
               >
-                <div className="flex items-center space-x-2.5">
-                  <QrCode className="w-5 h-5 text-indigo-700" />
-                  <span>UPI (GPay / PhonePe / Paytm)</span>
+                <div className="flex items-center space-x-1.5">
+                  <QrCode className="w-4 h-4 text-indigo-400" />
+                  <span className="text-sm">UPI</span>
                 </div>
-                <span className="text-xs font-mono">₹{settlingOrder.total_amount || settlingOrder.totalAmount}</span>
-              </button>
-
-              <button
-                onClick={() => handleCompleteSettle(settlingOrder.id, 'Card')}
-                disabled={settlingLoading}
-                data-testid="settle-pay-card"
-                className="w-full min-h-[48px] py-2.5 px-4 bg-[#FAF3E0] hover:bg-[#3E2723] hover:text-[#FFF8E7] text-[#3E2723] border border-[#D7CCC8] rounded-2xl font-bold text-sm flex items-center justify-between active:scale-98 transition-all shadow-sm"
-              >
-                <div className="flex items-center space-x-2.5">
-                  <CreditCard className="w-5 h-5 text-amber-700" />
-                  <span>Card Swipe / POS</span>
-                </div>
-                <span className="text-xs font-mono">₹{settlingOrder.total_amount || settlingOrder.totalAmount}</span>
+                {settlePaymentMethod === 'UPI' && (
+                  <span className="text-[10px] text-emerald-300 font-semibold flex items-center">
+                    <Check className="w-3 h-3 mr-0.5 stroke-[2.5]" /> Selected
+                  </span>
+                )}
               </button>
             </div>
 
+            {/* Tick Mark Submit Button */}
             <button
+              type="button"
+              onClick={() => handleCompleteSettle(settlingOrder.id, settlePaymentMethod)}
+              disabled={settlingLoading}
+              data-testid="settle-submit-btn"
+              className="w-full min-h-[48px] py-2.5 px-4 bg-emerald-700 hover:bg-emerald-800 active:scale-98 text-white rounded-2xl font-bold text-sm flex items-center justify-center space-x-2 shadow-md transition-all disabled:opacity-50"
+            >
+              <Check className="w-5 h-5 stroke-[2.5]" />
+              <span>{settlingLoading ? 'Submitting...' : '✓ Submit'}</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setSettlingOrder(null)}
               disabled={settlingLoading}
-              className="w-full min-h-[40px] text-xs text-[#8D6E63] hover:text-[#3E2723] font-semibold py-1.5 transition-colors"
+              className="w-full min-h-[36px] text-xs text-[#8D6E63] hover:text-[#3E2723] font-semibold py-1 transition-colors"
             >
               Cancel
             </button>

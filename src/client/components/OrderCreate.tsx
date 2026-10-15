@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Minus, Search, ShoppingBag, CreditCard, Banknote, QrCode } from 'lucide-react';
+import { Plus, Minus, Search, ShoppingBag, CreditCard, Banknote, QrCode, Check } from 'lucide-react';
 import { getMenuItems, createOrder, type MenuItem, type Order } from '../services/api.js';
 
 interface CartItem {
@@ -272,8 +272,8 @@ export const OrderCreate: React.FC<OrderCreateProps> = ({ onOrderPlaced }) => {
               data-testid="btn-submit-order"
               className="min-h-[48px] px-6 bg-[#3E2723] text-[#FFF8E7] font-bold text-sm rounded-xl hover:bg-[#4E342E] active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-md flex items-center justify-center space-x-2"
             >
-              <ShoppingBag className="w-4 h-4" />
-              <span>{submitting ? 'Placing...' : 'Place Order'}</span>
+              <Check className="w-4 h-4 stroke-[2.5]" />
+              <span>{submitting ? 'Submitting...' : '✓ Submit'}</span>
             </button>
           </div>
         </div>
