@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import express, { type Response } from 'express';
+import express, { type Request, type Response } from 'express';
 import { getDbClient } from '../db/client.js';
 import { requireReceptionAuth, type AuthenticatedRequest } from '../middleware/auth.js';
 import { getCafeDateKey, getCafeNow, type CafeRequest } from '../middleware/timezone.js';
@@ -46,6 +46,8 @@ export interface OrderItemRecord {
   quantity: number;
   qty?: number;
   subtotal: number;
+  is_delivered: boolean;
+  isDelivered?: boolean;
   created_at: string;
   createdAt?: string;
 }
@@ -93,6 +95,8 @@ function formatOrderResponse(row: any, items: any[]): OrderRecord {
     quantity: Number(it.quantity),
     qty: Number(it.quantity),
     subtotal: Number(it.subtotal),
+    is_delivered: Boolean(it.is_delivered),
+    isDelivered: Boolean(it.is_delivered),
     created_at: String(it.created_at),
     createdAt: String(it.created_at)
   }));
@@ -312,8 +316,8 @@ router.post('/', requireReceptionAuth, async (req: AuthenticatedRequest, res: Re
     for (const item of processedItems) {
       const lineItemId = `item_${crypto.randomUUID()}`;
       await db.execute({
-        sql: `INSERT INTO order_items (id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+        sql: `INSERT INTO order_items (id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?);`,
         args: [
           lineItemId,
           orderId,
@@ -334,6 +338,7 @@ router.post('/', requireReceptionAuth, async (req: AuthenticatedRequest, res: Re
         unit_price: item.unitPrice,
         quantity: item.quantity,
         subtotal: item.subtotal,
+        is_delivered: 0,
         created_at: nowIso
       });
     }
@@ -402,7 +407,7 @@ router.get('/', requireReceptionAuth, async (req: AuthenticatedRequest, res: Res
     // Fetch line items for these orders
     const placeholders = orderRows.map(() => '?').join(',');
     const itemsRes = await db.execute({
-      sql: `SELECT id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, created_at
+      sql: `SELECT id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, created_at
             FROM order_items
             WHERE order_id IN (${placeholders})
             ORDER BY rowid ASC;`,
@@ -499,8 +504,8 @@ async function handleEditOrder(req: AuthenticatedRequest, res: Response) {
       for (const item of itemData.processedItems) {
         const lineItemId = `item_${crypto.randomUUID()}`;
         await db.execute({
-          sql: `INSERT INTO order_items (id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+          sql: `INSERT INTO order_items (id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?);`,
           args: [
             lineItemId,
             orderId,
@@ -573,6 +578,18 @@ async function handleSettleOrder(req: AuthenticatedRequest, res: Response) {
       return res.status(409).json({ error: 'Cannot settle a cancelled order' });
     }
 
+    // Strict requirement: all items in the order must be delivered before settling
+    const undeliveredRes = await db.execute({
+      sql: `SELECT COUNT(*) as count FROM order_items WHERE order_id = ? AND is_delivered = 0;`,
+      args: [orderId]
+    });
+    const undeliveredCount = Number(undeliveredRes.rows[0]?.count || 0);
+    if (undeliveredCount > 0) {
+      return res.status(400).json({
+        error: `Cannot settle order: all items must be marked as delivered first (${undeliveredCount} item(s) pending).`
+      });
+    }
+
     const cafeReq = req as CafeRequest;
     const nowIso = (cafeReq.cafeTime || getCafeNow(req)).toISOString();
 
@@ -598,7 +615,8 @@ async function handleSettleOrder(req: AuthenticatedRequest, res: Response) {
       args: [orderId]
     });
     const itemsRes = await db.execute({
-      sql: `SELECT * FROM order_items WHERE order_id = ? ORDER BY rowid ASC;`,
+      sql: `SELECT id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, created_at
+            FROM order_items WHERE order_id = ? ORDER BY rowid ASC;`,
       args: [orderId]
     });
 
@@ -610,6 +628,122 @@ async function handleSettleOrder(req: AuthenticatedRequest, res: Response) {
     return res.status(500).json({ error: err.message || 'Failed to settle order' });
   }
 }
+
+/**
+ * Helper to fetch full order with items and format as OrderRecord.
+ */
+async function fetchFullOrderById(orderId: string, db: any): Promise<OrderRecord | null> {
+  const orderRes = await db.execute({
+    sql: `SELECT * FROM orders WHERE id = ?;`,
+    args: [orderId]
+  });
+  if (!orderRes.rows || orderRes.rows.length === 0) return null;
+  const itemsRes = await db.execute({
+    sql: `SELECT id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, created_at
+          FROM order_items
+          WHERE order_id = ?
+          ORDER BY rowid ASC;`,
+    args: [orderId]
+  });
+  return formatOrderResponse(orderRes.rows[0], itemsRes.rows);
+}
+
+/**
+ * PATCH /api/orders/:orderId/items/:itemId/deliver
+ * Toggles or sets delivery status of an individual item in an order.
+ * Broadcasts 'order:updated' via SSE to keep Kitchen and Reception in real-time sync.
+ */
+router.patch('/:orderId/items/:itemId/deliver', async (req: Request, res: Response) => {
+  try {
+    const db = getDbClient();
+    const { orderId, itemId } = req.params;
+
+    const itemRes = await db.execute({
+      sql: `SELECT * FROM order_items WHERE id = ? AND order_id = ?;`,
+      args: [itemId, orderId]
+    });
+
+    if (!itemRes.rows || itemRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Order item not found' });
+    }
+
+    const currentItem = itemRes.rows[0];
+    let newStatus: number;
+    if (typeof req.body?.isDelivered === 'boolean') {
+      newStatus = req.body.isDelivered ? 1 : 0;
+    } else if (typeof req.body?.is_delivered === 'boolean') {
+      newStatus = req.body.is_delivered ? 1 : 0;
+    } else {
+      newStatus = Number(currentItem.is_delivered) === 1 ? 0 : 1;
+    }
+
+    await db.execute({
+      sql: `UPDATE order_items SET is_delivered = ? WHERE id = ?;`,
+      args: [newStatus, itemId]
+    });
+
+    const cafeReq = req as CafeRequest;
+    const nowIso = (cafeReq.cafeTime || getCafeNow(req)).toISOString();
+    await db.execute({
+      sql: `UPDATE orders SET updated_at = ? WHERE id = ?;`,
+      args: [nowIso, orderId]
+    });
+
+    const updatedOrder = await fetchFullOrderById(orderId, db);
+    if (updatedOrder) {
+      broadcastOrderEvent({ type: 'order:updated', order: updatedOrder });
+    }
+
+    return res.status(200).json({
+      success: true,
+      itemId,
+      isDelivered: Boolean(newStatus),
+      is_delivered: Boolean(newStatus),
+      order: updatedOrder
+    });
+  } catch (err: any) {
+    console.error('[API /api/orders/:orderId/items/:itemId/deliver] Error:', err);
+    return res.status(500).json({ error: err.message || 'Failed to update item delivery status' });
+  }
+});
+
+/**
+ * PATCH /api/orders/:orderId/deliver-all
+ * Sets all items in an order as delivered or pending.
+ */
+router.patch('/:orderId/deliver-all', async (req: Request, res: Response) => {
+  try {
+    const db = getDbClient();
+    const { orderId } = req.params;
+    const isDelivered = req.body?.isDelivered !== false ? 1 : 0;
+
+    await db.execute({
+      sql: `UPDATE order_items SET is_delivered = ? WHERE order_id = ?;`,
+      args: [isDelivered, orderId]
+    });
+
+    const cafeReq = req as CafeRequest;
+    const nowIso = (cafeReq.cafeTime || getCafeNow(req)).toISOString();
+    await db.execute({
+      sql: `UPDATE orders SET updated_at = ? WHERE id = ?;`,
+      args: [nowIso, orderId]
+    });
+
+    const updatedOrder = await fetchFullOrderById(orderId, db);
+    if (updatedOrder) {
+      broadcastOrderEvent({ type: 'order:updated', order: updatedOrder });
+    }
+
+    return res.status(200).json({
+      success: true,
+      isDelivered: Boolean(isDelivered),
+      order: updatedOrder
+    });
+  } catch (err: any) {
+    console.error('[API /api/orders/:orderId/deliver-all] Error:', err);
+    return res.status(500).json({ error: err.message || 'Failed to update delivery status' });
+  }
+});
 
 router.post('/:id/done', requireReceptionAuth, handleSettleOrder);
 router.patch('/:id/settle', requireReceptionAuth, handleSettleOrder);

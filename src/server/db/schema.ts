@@ -53,13 +53,15 @@ export const SCHEMA_SQL = [
     unit_price REAL NOT NULL,
     quantity INTEGER NOT NULL,
     subtotal REAL NOT NULL,
+    is_delivered INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
   );`,
 
   // Indexes
   `CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);`,
   `CREATE INDEX IF NOT EXISTS idx_orders_date_key ON orders(date_key);`,
-  `CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);`
+  `CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);`,
+  `CREATE INDEX IF NOT EXISTS idx_order_items_is_delivered ON order_items(is_delivered);`
 ];
 
 /**
@@ -74,6 +76,13 @@ export async function initSchema(customClient?: Client): Promise<void> {
 
   for (const statement of SCHEMA_SQL) {
     await db.execute(statement);
+  }
+
+  // Auto-migration: ensure is_delivered column exists in order_items for existing databases
+  try {
+    await db.execute(`ALTER TABLE order_items ADD COLUMN is_delivered INTEGER NOT NULL DEFAULT 0;`);
+  } catch {
+    // Column already exists or table was freshly created
   }
 
   // Ensure default PIN is hashed and stored in settings table

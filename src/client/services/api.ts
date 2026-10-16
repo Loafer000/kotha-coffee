@@ -199,6 +199,8 @@ export interface OrderItem {
   quantity: number;
   qty: number;
   subtotal: number;
+  is_delivered?: boolean;
+  isDelivered?: boolean;
   created_at: string;
 }
 
@@ -345,6 +347,61 @@ export async function settleOrder(
   }
 
   return res.json();
+}
+
+/**
+ * Toggles or sets delivery status of an individual item in an order.
+ */
+export async function toggleItemDelivery(
+  orderId: string,
+  itemId: string,
+  isDelivered?: boolean,
+  token?: string
+): Promise<Order> {
+  const authToken = token || getStoredToken();
+  const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/items/${encodeURIComponent(itemId)}/deliver`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
+    },
+    body: JSON.stringify(typeof isDelivered === 'boolean' ? { isDelivered } : {})
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to update item delivery status');
+  }
+
+  const data = await res.json();
+  return data.order;
+}
+
+/**
+ * Marks all items in an order as delivered or pending.
+ */
+export async function setAllItemsDelivery(
+  orderId: string,
+  isDelivered: boolean,
+  token?: string
+): Promise<Order> {
+  const authToken = token || getStoredToken();
+  const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/deliver-all`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
+    },
+    body: JSON.stringify({ isDelivered })
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to update items delivery status');
+  }
+
+  const data = await res.json();
+  return data.order;
 }
 
 /**

@@ -17,7 +17,10 @@ import {
   Banknote,
   QrCode,
   CreditCard,
-  Search
+  Search,
+  ChevronDown,
+  ChevronUp,
+  Lock
 } from 'lucide-react';
 import { 
   getStoredToken, 
@@ -26,6 +29,8 @@ import {
   settleOrder, 
   cancelOrder, 
   getMenuItems,
+  toggleItemDelivery,
+  setAllItemsDelivery,
   type Order, 
   type MenuItem,
   type UpdateOrderInput 
@@ -50,6 +55,7 @@ export const Reception: React.FC = () => {
   const [settledOrders, setSettledOrders] = useState<Order[]>([]);
   const [loadingOrders, setLoadingOrders] = useState<boolean>(false);
   const [orderActionError, setOrderActionError] = useState<string | null>(null);
+  const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
 
   // Placed Order Confirmation Modal
   const [confirmationOrder, setConfirmationOrder] = useState<Order | null>(null);
@@ -122,7 +128,73 @@ export const Reception: React.FC = () => {
     loadOrders();
   };
 
+  const toggleOrderExpanded = (orderId: string) => {
+    setExpandedOrders((prev) => {
+      const next = new Set(prev);
+      if (next.has(orderId)) {
+        next.delete(orderId);
+      } else {
+        next.add(orderId);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleItemDelivery = async (orderId: string, itemId: string, newStatus: boolean) => {
+    // Optimistic local state update
+    setPendingOrders((prev) =>
+      prev.map((o) => {
+        if (o.id !== orderId) return o;
+        return {
+          ...o,
+          items: (o.items || []).map((it) =>
+            it.id === itemId
+              ? { ...it, is_delivered: newStatus, isDelivered: newStatus }
+              : it
+          )
+        };
+      })
+    );
+
+    try {
+      await toggleItemDelivery(orderId, itemId, newStatus, token || undefined);
+    } catch (err: any) {
+      setOrderActionError(err.message || 'Failed to update item delivery status');
+      loadOrders();
+    }
+  };
+
+  const handleDeliverAllItems = async (orderId: string, newStatus: boolean) => {
+    // Optimistic local state update
+    setPendingOrders((prev) =>
+      prev.map((o) => {
+        if (o.id !== orderId) return o;
+        return {
+          ...o,
+          items: (o.items || []).map((it) => ({
+            ...it,
+            is_delivered: newStatus,
+            isDelivered: newStatus
+          }))
+        };
+      })
+    );
+
+    try {
+      await setAllItemsDelivery(orderId, newStatus, token || undefined);
+    } catch (err: any) {
+      setOrderActionError(err.message || 'Failed to update delivery status');
+      loadOrders();
+    }
+  };
+
   const handleMarkDone = (order: Order) => {
+    const items = order.items || [];
+    const allDelivered = items.length > 0 && items.every((it) => it.is_delivered || it.isDelivered);
+    if (!allDelivered) {
+      setOrderActionError('Please mark all items in this order as delivered before settling.');
+      return;
+    }
     // Open payment selection modal at the moment order is marked done
     setSettlingOrder(order);
     const existing = order.payment_method || order.paymentMethod;
@@ -337,13 +409,30 @@ export const Reception: React.FC = () => {
             <h2 className="text-sm font-bold text-[#3E2723]">
               Active Pending Orders ({pendingOrders.length})
             </h2>
-            <button
-              onClick={loadOrders}
-              className="text-xs text-[#5D4037] hover:text-[#3E2723] flex items-center space-x-1"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Refresh</span>
-            </button>
+            <div className="flex items-center space-x-2">
+              {pendingOrders.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (expandedOrders.size === pendingOrders.length) {
+                      setExpandedOrders(new Set());
+                    } else {
+                      setExpandedOrders(new Set(pendingOrders.map((o) => o.id)));
+                    }
+                  }}
+                  className="text-xs text-[#5D4037] hover:text-[#3E2723] font-semibold bg-[#FAF3E0] px-2.5 py-1 rounded-lg border border-[#D7CCC8] transition-colors"
+                >
+                  {expandedOrders.size === pendingOrders.length ? 'Collapse All' : 'Expand All'}
+                </button>
+              )}
+              <button
+                onClick={loadOrders}
+                className="text-xs text-[#5D4037] hover:text-[#3E2723] flex items-center space-x-1"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Refresh</span>
+              </button>
+            </div>
           </div>
 
           <div data-testid="orders-list" className="space-y-3">
@@ -357,80 +446,231 @@ export const Reception: React.FC = () => {
                 const total = order.total_amount || order.totalAmount || 0;
                 const payment = order.payment_method || order.paymentMethod || 'Cash';
                 const items = order.items || [];
+                const deliveredCount = items.filter((it) => it.is_delivered || it.isDelivered).length;
+                const allDelivered = items.length > 0 && deliveredCount === items.length;
+                const isExpanded = expandedOrders.has(order.id) || (expandedOrders.size === 0 && pendingOrders.length <= 2);
 
                 return (
                   <div
                     key={order.id}
                     data-testid={`order-card-${order.id}`}
-                    className="order-card p-4 rounded-2xl bg-white border-2 border-[#EADCC8] shadow-sm flex flex-col justify-between space-y-3"
+                    className={`order-card rounded-2xl bg-white border-2 transition-all shadow-sm flex flex-col justify-between overflow-hidden ${
+                      allDelivered ? 'border-emerald-500/80 ring-1 ring-emerald-500/20' : 'border-[#EADCC8]'
+                    }`}
                   >
-                    {/* Header: Order Number and Total */}
-                    <div className="flex justify-between items-start border-b border-[#F5EBE1] pb-2">
-                      <div className="flex items-baseline space-x-2">
+                    {/* Clickable Header: Order Number, Delivery Status, and Total */}
+                    <div 
+                      onClick={() => toggleOrderExpanded(order.id)}
+                      className="p-3.5 bg-gradient-to-r from-white to-[#FAF3E0]/40 flex justify-between items-center cursor-pointer hover:bg-[#FAF3E0]/60 transition-colors select-none"
+                    >
+                      <div className="flex items-center space-x-2.5">
                         <span className="text-2xl font-black text-[#3E2723]">
                           #{orderNum}
                         </span>
-                        <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-200">
-                          Pending
-                        </span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-base font-extrabold text-[#3E2723]">
-                          ₹{total}
-                        </span>
-                        <span className="block text-[10px] text-[#8D6E63]">
-                          via {payment}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Line Items List */}
-                    <div className="space-y-1 text-xs text-[#5D4037]">
-                      {items.map((it, idx) => (
-                        <div key={idx} className="flex justify-between items-center text-[12px]">
-                          <span className="font-medium text-[#3E2723]">
-                            {it.quantity}x {it.item_name || it.name}
-                          </span>
-                          <span className="font-mono text-[11px] text-[#8D6E63]">
-                            ₹{it.subtotal}
+                        
+                        <div className="flex flex-col">
+                          <div className="flex items-center space-x-1.5">
+                            <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-200">
+                              Pending
+                            </span>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                              allDelivered
+                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                : deliveredCount > 0
+                                ? 'bg-amber-50 text-amber-900 border-amber-200'
+                                : 'bg-gray-100 text-gray-700 border-gray-200'
+                            }`}>
+                              {deliveredCount}/{items.length} Delivered
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-[#8D6E63] mt-0.5 font-medium">
+                            {isExpanded ? 'Click to collapse' : 'Click to open items checklist'}
                           </span>
                         </div>
-                      ))}
-                      {order.notes && (
-                        <p className="text-[11px] italic text-[#8D493A] mt-1 bg-[#FAF3E0] p-1.5 rounded-lg border border-[#EADCC8]">
-                          Note: {order.notes}
-                        </p>
-                      )}
+                      </div>
+
+                      <div className="flex items-center space-x-3">
+                        <div className="text-right">
+                          <span className="text-base font-extrabold text-[#3E2723] block leading-tight">
+                            ₹{total}
+                          </span>
+                          <span className="text-[10px] text-[#8D6E63]">
+                            via {payment}
+                          </span>
+                        </div>
+                        <div className="w-8 h-8 rounded-full bg-[#FAF3E0] border border-[#D7CCC8] flex items-center justify-center text-[#5D4037]">
+                          {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                        </div>
+                      </div>
                     </div>
 
-                    {/* Action Buttons: Done, Edit, Cancel */}
-                    <div className="flex items-center space-x-2 pt-2 border-t border-[#F5EBE1]">
-                      <button
-                        onClick={() => handleMarkDone(order)}
-                        data-testid={`btn-done-${order.id}`}
-                        className="flex-1 min-h-[44px] py-2 px-3 bg-emerald-700 text-white rounded-xl font-bold text-xs hover:bg-emerald-800 active:scale-95 transition-all shadow-sm flex items-center justify-center space-x-1"
-                      >
-                        <Check className="w-4 h-4" />
-                        <span>Done</span>
-                      </button>
+                    {/* Expanded Items Delivery Checklist */}
+                    {isExpanded ? (
+                      <div className="p-3.5 pt-1 space-y-3 border-t border-[#F5EBE1] animate-fade-in">
+                        {/* Section Header with Quick Actions */}
+                        <div className="flex justify-between items-center bg-[#FAF3E0]/70 p-2 rounded-xl border border-[#EADCC8]">
+                          <div>
+                            <span className="text-xs font-bold text-[#3E2723] block">
+                              Items Checklist ({deliveredCount}/{items.length})
+                            </span>
+                            <span className="text-[10px] text-[#8D6E63]">
+                              {allDelivered ? 'All items delivered! Ready to settle.' : 'Tick each item as it is served'}
+                            </span>
+                          </div>
 
-                      <button
-                        onClick={() => startEditOrder(order)}
-                        data-testid={`btn-edit-${order.id}`}
-                        className="min-h-[44px] px-3.5 py-2 bg-[#FAF3E0] text-[#3E2723] rounded-xl font-semibold text-xs border border-[#D7CCC8] hover:bg-[#EADCC8] active:scale-95 transition-all flex items-center justify-center space-x-1"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                        <span>Edit</span>
-                      </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeliverAllItems(order.id, !allDelivered);
+                            }}
+                            className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-all ${
+                              allDelivered
+                                ? 'bg-white text-[#5D4037] border-[#D7CCC8] hover:bg-[#FAF3E0]'
+                                : 'bg-emerald-700 text-white border-emerald-800 hover:bg-emerald-800 shadow-xs'
+                            }`}
+                          >
+                            {allDelivered ? 'Reset All' : '✓ Tick All'}
+                          </button>
+                        </div>
 
-                      <button
-                        onClick={() => setCancellingOrderId(order.id)}
-                        data-testid={`btn-cancel-${order.id}`}
-                        className="min-w-[44px] min-h-[44px] p-2.5 bg-rose-50 text-rose-700 rounded-xl font-semibold text-xs border border-rose-200 hover:bg-rose-100 active:scale-95 transition-all flex items-center justify-center"
+                        {/* Interactive Line Items List with Tickboxes */}
+                        <div className="space-y-1.5">
+                          {items.map((it, idx) => {
+                            const isDelivered = Boolean(it.is_delivered || it.isDelivered);
+                            return (
+                              <div
+                                key={it.id || idx}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (it.id) {
+                                    handleToggleItemDelivery(order.id, it.id, !isDelivered);
+                                  }
+                                }}
+                                className={`w-full p-2.5 rounded-xl border flex items-center justify-between cursor-pointer select-none transition-all active:scale-[0.99] ${
+                                  isDelivered
+                                    ? 'bg-emerald-50 border-emerald-300 text-emerald-950 shadow-xs'
+                                    : 'bg-[#FAF3E0]/50 border-[#D7CCC8] text-[#3E2723] hover:bg-[#FAF3E0]'
+                                }`}
+                              >
+                                <div className="flex items-center space-x-2.5 min-w-0 pr-2">
+                                  {/* Custom Checkbox */}
+                                  <div className={`w-6 h-6 rounded-lg flex items-center justify-center border transition-all flex-shrink-0 ${
+                                    isDelivered
+                                      ? 'bg-emerald-600 border-emerald-600 text-white shadow-xs'
+                                      : 'bg-white border-[#D7CCC8] text-transparent hover:border-[#8D6E63]'
+                                  }`}>
+                                    <Check className="w-4 h-4 stroke-[3]" />
+                                  </div>
+
+                                  <div className="min-w-0">
+                                    <span className={`text-xs font-bold leading-tight block truncate ${
+                                      isDelivered ? 'line-through text-emerald-800 opacity-80' : 'text-[#3E2723]'
+                                    }`}>
+                                      {it.quantity || it.qty}x {it.item_name || it.name}
+                                    </span>
+                                    <span className="text-[10px] text-[#8D6E63] font-mono">
+                                      ₹{it.subtotal} (₹{it.unit_price || it.unitPrice} each)
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider flex-shrink-0 flex items-center space-x-1 ${
+                                  isDelivered
+                                    ? 'bg-emerald-200/90 text-emerald-900 border border-emerald-300'
+                                    : 'bg-amber-100 text-amber-900 border border-amber-200'
+                                }`}>
+                                  {isDelivered ? (
+                                    <>
+                                      <Check className="w-3 h-3 stroke-[3]" />
+                                      <span>Delivered</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Clock className="w-3 h-3" />
+                                      <span>Pending</span>
+                                    </>
+                                  )}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {order.notes && (
+                          <p className="text-[11px] italic text-[#8D493A] bg-[#FAF3E0] p-2 rounded-xl border border-[#EADCC8]">
+                            Note: {order.notes}
+                          </p>
+                        )}
+
+                        {/* Action Buttons: Done, Edit, Cancel */}
+                        <div className="flex items-center space-x-2 pt-2 border-t border-[#F5EBE1]">
+                          {allDelivered ? (
+                            <button
+                              type="button"
+                              onClick={() => handleMarkDone(order)}
+                              data-testid={`btn-done-${order.id}`}
+                              className="flex-1 min-h-[44px] py-2 px-3 bg-emerald-700 text-white rounded-xl font-bold text-xs hover:bg-emerald-800 active:scale-95 transition-all shadow-md flex items-center justify-center space-x-1.5"
+                            >
+                              <Check className="w-4 h-4 stroke-[2.5]" />
+                              <span>✓ Done & Settle</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled
+                              data-testid={`btn-done-${order.id}`}
+                              title={`Deliver all items first before settling (${deliveredCount}/${items.length} delivered)`}
+                              className="flex-1 min-h-[44px] py-2 px-3 bg-[#EADCC8]/60 text-[#8D6E63] rounded-xl font-bold text-xs cursor-not-allowed flex items-center justify-center space-x-1.5 border border-[#D7CCC8]"
+                            >
+                              <Lock className="w-3.5 h-3.5 text-[#8D6E63]" />
+                              <span>Done ({deliveredCount}/{items.length} Delivered)</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => startEditOrder(order)}
+                            data-testid={`btn-edit-${order.id}`}
+                            className="min-h-[44px] px-3.5 py-2 bg-[#FAF3E0] text-[#3E2723] rounded-xl font-semibold text-xs border border-[#D7CCC8] hover:bg-[#EADCC8] active:scale-95 transition-all flex items-center justify-center space-x-1"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>Edit</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setCancellingOrderId(order.id)}
+                            data-testid={`btn-cancel-${order.id}`}
+                            className="min-w-[44px] min-h-[44px] p-2.5 bg-rose-50 text-rose-700 rounded-xl font-semibold text-xs border border-rose-200 hover:bg-rose-100 active:scale-95 transition-all flex items-center justify-center"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      /* Collapsed Compact Preview */
+                      <div 
+                        onClick={() => toggleOrderExpanded(order.id)}
+                        className="px-3.5 py-2 bg-[#FAF3E0]/30 border-t border-[#F5EBE1] flex justify-between items-center cursor-pointer hover:bg-[#FAF3E0]/50 transition-colors"
                       >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
+                        <span className="text-xs text-[#5D4037] font-medium">
+                          {items.length} {items.length === 1 ? 'item' : 'items'} ({deliveredCount} delivered) • <strong className="text-[#3E2723]">Click to open</strong>
+                        </span>
+                        <div className="flex items-center space-x-2">
+                          {allDelivered ? (
+                            <span className="text-[10px] font-bold text-emerald-700 flex items-center space-x-0.5">
+                              <Check className="w-3 h-3 stroke-[3]" />
+                              <span>Ready to settle</span>
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-amber-800 font-medium">
+                              {items.length - deliveredCount} pending
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })
