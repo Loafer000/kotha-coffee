@@ -20,6 +20,8 @@ export const OrderSlip: React.FC<OrderSlipProps> = ({
   const payment = order.payment_method || order.paymentMethod || 'Cash';
   const items = order.items || [];
 
+  const hasParcel = items.some((it) => it.is_parcel || it.isParcel);
+
   return (
     <div 
       data-testid="order-confirmation-slip"
@@ -48,24 +50,38 @@ export const OrderSlip: React.FC<OrderSlipProps> = ({
           </span>
         </div>
 
+        {hasParcel && (
+          <span className="my-1 px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-orange-600 text-white shadow-xs">
+            📦 Takeaway / Parcel Order
+          </span>
+        )}
+
         {/* Order Details & Items Snapshot */}
-        <div className="w-full bg-[#FAF3E0] rounded-xl p-3 my-3 text-left border border-[#EADCC8] text-xs">
+        <div className="w-full bg-[#FAF3E0] rounded-xl p-3 my-2 text-left border border-[#EADCC8] text-xs">
           <div className="flex justify-between items-center pb-2 border-b border-[#D7CCC8] font-medium text-[#3E2723]">
             <span>Payment: <strong className="text-[#8D493A]">{payment}</strong></span>
             <span>Total: <strong className="text-base text-[#3E2723]">₹{total}</strong></span>
           </div>
           
           <div className="mt-2 max-h-[110px] overflow-y-auto space-y-1 pr-1 text-[#5D4037]">
-            {items.map((it, idx) => (
-              <div key={idx} className="flex justify-between items-center text-[11px]">
-                <span className="truncate max-w-[190px]">
-                  {it.quantity}x {it.item_name || it.name}
-                </span>
-                <span className="font-mono text-[#3E2723] font-semibold">
-                  ₹{it.subtotal}
-                </span>
-              </div>
-            ))}
+            {items.map((it, idx) => {
+              const itIsParcel = Boolean(it.is_parcel || it.isParcel);
+              return (
+                <div key={idx} className="flex justify-between items-center text-[11px]">
+                  <span className="truncate max-w-[190px] flex items-center space-x-1">
+                    <span>{it.quantity}x {it.item_name || it.name}</span>
+                    {itIsParcel && (
+                      <span className="text-[9px] font-black text-orange-600 ml-1">
+                        [Parcel]
+                      </span>
+                    )}
+                  </span>
+                  <span className="font-mono text-[#3E2723] font-semibold">
+                    ₹{it.subtotal}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
 

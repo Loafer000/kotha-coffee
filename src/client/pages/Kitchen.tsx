@@ -419,23 +419,31 @@ export const Kitchen: React.FC = () => {
                   >
                     {/* Top ticket strip */}
                     <div className="flex justify-between items-center border-b border-[#F5EBE1] pb-2">
-                      <div className="flex items-center space-x-2">
+                      <div className="flex items-center space-x-2 flex-wrap gap-y-1">
                         <span className="text-3xl font-black text-[#3E2723]">
                           #{orderNum}
                         </span>
                         {(() => {
                           const deliveredCount = items.filter((it) => it.is_delivered || it.isDelivered).length;
                           const allDelivered = items.length > 0 && deliveredCount === items.length;
+                          const hasParcel = items.some((it) => it.is_parcel || it.isParcel);
                           return (
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                              allDelivered
-                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                : deliveredCount > 0
-                                ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                                : 'bg-amber-100 text-amber-900 border border-amber-200'
-                            }`}>
-                              {allDelivered ? '✓ All Items Delivered' : `${deliveredCount}/${items.length} Delivered`}
-                            </span>
+                            <div className="flex items-center space-x-1.5 flex-wrap">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                allDelivered
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                  : deliveredCount > 0
+                                  ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                  : 'bg-amber-100 text-amber-900 border border-amber-200'
+                              }`}>
+                                {allDelivered ? '✓ All Delivered' : `${deliveredCount}/${items.length} Delivered`}
+                              </span>
+                              {hasParcel && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-orange-600 text-white border border-orange-700 shadow-xs flex items-center space-x-1">
+                                  <span>📦 PARCEL / TAKEAWAY</span>
+                                </span>
+                              )}
+                            </div>
                           );
                         })()}
                       </div>
@@ -444,10 +452,11 @@ export const Kitchen: React.FC = () => {
                       </span>
                     </div>
 
-                    {/* Ticket Items (Big and legible for cooks, with green delivery ticks) */}
+                    {/* Ticket Items (Big and legible for cooks, with green delivery ticks and parcel badges) */}
                     <div className="space-y-1.5 py-1">
                       {items.map((it, idx) => {
                         const isDelivered = Boolean(it.is_delivered || it.isDelivered);
+                        const isParcel = Boolean(it.is_parcel || it.isParcel);
                         return (
                           <div
                             key={it.id || idx}
@@ -456,6 +465,8 @@ export const Kitchen: React.FC = () => {
                             className={`p-2 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
                               isDelivered
                                 ? 'bg-emerald-50 border-emerald-300 text-emerald-950 shadow-xs'
+                                : isParcel
+                                ? 'bg-amber-50/80 border-orange-300 text-[#3E2723] hover:bg-amber-100/60'
                                 : 'bg-[#FAF3E0]/70 border-[#D7CCC8] text-[#3E2723] hover:bg-[#FAF3E0]'
                             }`}
                           >
@@ -463,13 +474,24 @@ export const Kitchen: React.FC = () => {
                               <span className={`w-7 h-7 rounded-md flex items-center justify-center text-xs font-black flex-shrink-0 border transition-all ${
                                 isDelivered
                                   ? 'bg-emerald-600 border-emerald-600 text-white shadow-xs'
+                                  : isParcel
+                                  ? 'bg-orange-600 border-orange-700 text-white shadow-xs'
                                   : 'bg-[#FAF3E0] border-[#D7CCC8] text-[#8D493A]'
                               }`}>
                                 {isDelivered ? <Check className="w-4 h-4 stroke-[3]" /> : `${it.quantity || it.qty}x`}
                               </span>
-                              <span className={`leading-snug break-words ${isDelivered ? 'line-through text-emerald-800 opacity-80' : ''}`}>
-                                {it.quantity || it.qty}x {it.item_name || it.name}
-                              </span>
+                              <div className="min-w-0">
+                                <div className="flex items-center space-x-1.5 flex-wrap">
+                                  <span className={`leading-snug break-words ${isDelivered ? 'line-through text-emerald-800 opacity-80' : ''}`}>
+                                    {it.quantity || it.qty}x {it.item_name || it.name}
+                                  </span>
+                                  {isParcel && (
+                                    <span className="px-1.5 py-0.2 rounded bg-orange-600 text-white text-[9px] font-black uppercase tracking-wider inline-flex items-center shadow-xs">
+                                      📦 PARCEL
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
                             </div>
 
                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider flex-shrink-0 flex items-center space-x-1 ${

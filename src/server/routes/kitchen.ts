@@ -22,6 +22,8 @@ function formatOrder(row: any, items: any[]): OrderRecord {
     subtotal: Number(it.subtotal),
     is_delivered: Boolean(it.is_delivered),
     isDelivered: Boolean(it.is_delivered),
+    is_parcel: Boolean(it.is_parcel),
+    isParcel: Boolean(it.is_parcel),
     created_at: String(it.created_at),
     createdAt: String(it.created_at)
   }));
@@ -88,7 +90,7 @@ router.get('/orders', async (req: Request, res: Response) => {
     if (allOrderRows.length > 0) {
       const placeholders = allOrderRows.map(() => '?').join(',');
       const itemsRes = await db.execute({
-        sql: `SELECT id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, created_at
+        sql: `SELECT id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, is_parcel, created_at
               FROM order_items
               WHERE order_id IN (${placeholders})
               ORDER BY rowid ASC;`,

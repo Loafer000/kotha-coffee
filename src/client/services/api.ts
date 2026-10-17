@@ -201,6 +201,8 @@ export interface OrderItem {
   subtotal: number;
   is_delivered?: boolean;
   isDelivered?: boolean;
+  is_parcel?: boolean;
+  isParcel?: boolean;
   created_at: string;
 }
 
@@ -231,6 +233,7 @@ export interface CreateOrderItemInput {
   name?: string;
   unitPrice?: number;
   quantity: number;
+  isParcel?: boolean;
 }
 
 export interface CreateOrderInput {
@@ -398,6 +401,61 @@ export async function setAllItemsDelivery(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || 'Failed to update items delivery status');
+  }
+
+  const data = await res.json();
+  return data.order;
+}
+
+/**
+ * Toggles or sets parcel/takeaway status of an individual item in an order.
+ */
+export async function toggleItemParcel(
+  orderId: string,
+  itemId: string,
+  isParcel?: boolean,
+  token?: string
+): Promise<Order> {
+  const authToken = token || getStoredToken();
+  const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/items/${encodeURIComponent(itemId)}/parcel`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
+    },
+    body: JSON.stringify(typeof isParcel === 'boolean' ? { isParcel } : {})
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to update item parcel status');
+  }
+
+  const data = await res.json();
+  return data.order;
+}
+
+/**
+ * Sets all items in an order as parcel or dine-in.
+ */
+export async function setAllItemsParcel(
+  orderId: string,
+  isParcel: boolean,
+  token?: string
+): Promise<Order> {
+  const authToken = token || getStoredToken();
+  const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/parcel-all`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
+    },
+    body: JSON.stringify({ isParcel })
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to update items parcel status');
   }
 
   const data = await res.json();

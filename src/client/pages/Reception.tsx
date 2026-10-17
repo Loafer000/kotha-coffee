@@ -20,7 +20,9 @@ import {
   Search,
   ChevronDown,
   ChevronUp,
-  Lock
+  Lock,
+  Calendar,
+  Package
 } from 'lucide-react';
 import { 
   getStoredToken, 
@@ -31,6 +33,8 @@ import {
   getMenuItems,
   toggleItemDelivery,
   setAllItemsDelivery,
+  toggleItemParcel,
+  setAllItemsParcel,
   type Order, 
   type MenuItem,
   type UpdateOrderInput 
@@ -43,6 +47,73 @@ import { MenuAdmin } from './MenuAdmin.js';
 import { Analytics } from './Analytics.js';
 
 type Tab = 'create' | 'pending' | 'settled' | 'menu' | 'analytics';
+
+/**
+ * Formats a YYYY-MM-DD date key into an easily readable Indian English string (e.g., Sat, 17 Oct 2026).
+ */
+function formatReadableDate(dateKey: string): string {
+  try {
+    const parts = dateKey.split('-');
+    if (parts.length === 3) {
+      const year = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const day = parseInt(parts[2], 10);
+      const date = new Date(year, month, day);
+      return date.toLocaleDateString('en-IN', {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric'
+      });
+    }
+    return dateKey;
+  } catch {
+    return dateKey;
+  }
+}
+
+/**
+ * Returns today's YYYY-MM-DD date key in Asia/Kolkata timezone.
+ */
+function getTodayDateKey(): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(new Date());
+  } catch {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+}
+
+interface DateGroup {
+  dateKey: string;
+  orders: Order[];
+  totalAmount: number;
+}
+
+/**
+ * Groups orders by date_key and sorts descending (today / latest at the top, older dates below).
+ */
+function groupOrdersByDateKey(orders: Order[]): DateGroup[] {
+  const map = new Map<string, DateGroup>();
+  for (const order of orders) {
+    const key = order.date_key || order.dateKey || 'Unknown';
+    if (!map.has(key)) {
+      map.set(key, { dateKey: key, orders: [], totalAmount: 0 });
+    }
+    const grp = map.get(key)!;
+    grp.orders.push(order);
+    grp.totalAmount += Number(order.total_amount || order.totalAmount || 0);
+  }
+  return Array.from(map.values()).sort((a, b) => b.dateKey.localeCompare(a.dateKey));
+}
 
 export const Reception: React.FC = () => {
   const [token, setToken] = useState<string | null>(null);
@@ -62,7 +133,7 @@ export const Reception: React.FC = () => {
 
   // Edit Order State
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
-  const [editItems, setEditItems] = useState<Array<{ name: string; unitPrice: number; quantity: number }>>([]);
+  const [editItems, setEditItems] = useState<Array<{ name: string; unitPrice: number; quantity: number; isParcel?: boolean }>>([]);
   const [editPayment, setEditPayment] = useState<'Cash' | 'UPI' | 'Card'>('Cash');
   const [editNotes, setEditNotes] = useState<string>('');
   const [editSaving, setEditSaving] = useState<boolean>(false);
@@ -188,6 +259,54 @@ export const Reception: React.FC = () => {
     }
   };
 
+  const handleToggleItemParcel = async (orderId: string, itemId: string, newParcel: boolean) => {
+    // Optimistic local state update
+    setPendingOrders((prev) =>
+      prev.map((o) => {
+        if (o.id !== orderId) return o;
+        return {
+          ...o,
+          items: (o.items || []).map((it) =>
+            it.id === itemId
+              ? { ...it, is_parcel: newParcel, isParcel: newParcel }
+              : it
+          )
+        };
+      })
+    );
+
+    try {
+      await toggleItemParcel(orderId, itemId, newParcel, token || undefined);
+    } catch (err: any) {
+      setOrderActionError(err.message || 'Failed to update item parcel status');
+      loadOrders();
+    }
+  };
+
+  const handleParcelAllItems = async (orderId: string, newParcel: boolean) => {
+    // Optimistic local state update
+    setPendingOrders((prev) =>
+      prev.map((o) => {
+        if (o.id !== orderId) return o;
+        return {
+          ...o,
+          items: (o.items || []).map((it) => ({
+            ...it,
+            is_parcel: newParcel,
+            isParcel: newParcel
+          }))
+        };
+      })
+    );
+
+    try {
+      await setAllItemsParcel(orderId, newParcel, token || undefined);
+    } catch (err: any) {
+      setOrderActionError(err.message || 'Failed to update parcel status');
+      loadOrders();
+    }
+  };
+
   const handleMarkDone = (order: Order) => {
     const items = order.items || [];
     const allDelivered = items.length > 0 && items.every((it) => it.is_delivered || it.isDelivered);
@@ -226,7 +345,8 @@ export const Reception: React.FC = () => {
       (order.items || []).map((it) => ({
         name: it.item_name || it.name,
         unitPrice: Number(it.unit_price || it.unitPrice || 0),
-        quantity: Number(it.quantity || it.qty || 1)
+        quantity: Number(it.quantity || it.qty || 1),
+        isParcel: Boolean(it.is_parcel || it.isParcel)
       }))
     );
   };
@@ -239,7 +359,7 @@ export const Reception: React.FC = () => {
         next[idx].quantity += 1;
         return next;
       }
-      return [...prev, { name: menuItem.name, unitPrice: menuItem.price, quantity: 1 }];
+      return [...prev, { name: menuItem.name, unitPrice: menuItem.price, quantity: 1, isParcel: false }];
     });
   };
 
@@ -258,7 +378,8 @@ export const Reception: React.FC = () => {
         items: editItems.map((it) => ({
           name: it.name,
           unitPrice: it.unitPrice,
-          quantity: it.quantity
+          quantity: it.quantity,
+          isParcel: it.isParcel
         }))
       };
       await updateOrder(editingOrder.id, payload, token);
@@ -518,42 +639,66 @@ export const Reception: React.FC = () => {
                             </span>
                           </div>
 
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeliverAllItems(order.id, !allDelivered);
-                            }}
-                            className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-all ${
-                              allDelivered
-                                ? 'bg-white text-[#5D4037] border-[#D7CCC8] hover:bg-[#FAF3E0]'
-                                : 'bg-emerald-700 text-white border-emerald-800 hover:bg-emerald-800 shadow-xs'
-                            }`}
-                          >
-                            {allDelivered ? 'Reset All' : '✓ Tick All'}
-                          </button>
+                          <div className="flex items-center space-x-1.5">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const allParcel = items.length > 0 && items.every((it) => it.is_parcel || it.isParcel);
+                                handleParcelAllItems(order.id, !allParcel);
+                              }}
+                              className={`px-2 py-1 text-[11px] font-bold rounded-lg border transition-all ${
+                                items.length > 0 && items.every((it) => it.is_parcel || it.isParcel)
+                                  ? 'bg-orange-600 text-white border-orange-700 shadow-xs'
+                                  : 'bg-white text-[#8D493A] border-[#D7CCC8] hover:bg-[#FAF3E0]'
+                              }`}
+                            >
+                              {items.length > 0 && items.every((it) => it.is_parcel || it.isParcel) ? 'Dine All' : '📦 P All'}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeliverAllItems(order.id, !allDelivered);
+                              }}
+                              className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-all ${
+                                allDelivered
+                                  ? 'bg-white text-[#5D4037] border-[#D7CCC8] hover:bg-[#FAF3E0]'
+                                  : 'bg-emerald-700 text-white border-emerald-800 hover:bg-emerald-800 shadow-xs'
+                              }`}
+                            >
+                              {allDelivered ? 'Reset All' : '✓ Tick All'}
+                            </button>
+                          </div>
                         </div>
 
-                        {/* Interactive Line Items List with Tickboxes */}
+                        {/* Interactive Line Items List with Tickboxes & Parcel P Button */}
                         <div className="space-y-1.5">
                           {items.map((it, idx) => {
                             const isDelivered = Boolean(it.is_delivered || it.isDelivered);
+                            const isParcel = Boolean(it.is_parcel || it.isParcel);
                             return (
                               <div
                                 key={it.id || idx}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (it.id) {
-                                    handleToggleItemDelivery(order.id, it.id, !isDelivered);
-                                  }
-                                }}
-                                className={`w-full p-2.5 rounded-xl border flex items-center justify-between cursor-pointer select-none transition-all active:scale-[0.99] ${
+                                className={`w-full p-2.5 rounded-xl border flex items-center justify-between select-none transition-all ${
                                   isDelivered
                                     ? 'bg-emerald-50 border-emerald-300 text-emerald-950 shadow-xs'
+                                    : isParcel
+                                    ? 'bg-amber-50/70 border-orange-300 text-[#3E2723]'
                                     : 'bg-[#FAF3E0]/50 border-[#D7CCC8] text-[#3E2723] hover:bg-[#FAF3E0]'
                                 }`}
                               >
-                                <div className="flex items-center space-x-2.5 min-w-0 pr-2">
+                                {/* Left Side: Checkbox & Item Name */}
+                                <div 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (it.id) {
+                                      handleToggleItemDelivery(order.id, it.id, !isDelivered);
+                                    }
+                                  }}
+                                  className="flex items-center space-x-2.5 min-w-0 pr-2 flex-1 cursor-pointer"
+                                >
                                   {/* Custom Checkbox */}
                                   <div className={`w-6 h-6 rounded-lg flex items-center justify-center border transition-all flex-shrink-0 ${
                                     isDelivered
@@ -564,34 +709,69 @@ export const Reception: React.FC = () => {
                                   </div>
 
                                   <div className="min-w-0">
-                                    <span className={`text-xs font-bold leading-tight block truncate ${
-                                      isDelivered ? 'line-through text-emerald-800 opacity-80' : 'text-[#3E2723]'
-                                    }`}>
-                                      {it.quantity || it.qty}x {it.item_name || it.name}
-                                    </span>
+                                    <div className="flex items-center space-x-1.5 flex-wrap">
+                                      <span className={`text-xs font-bold leading-tight block truncate ${
+                                        isDelivered ? 'line-through text-emerald-800 opacity-80' : 'text-[#3E2723]'
+                                      }`}>
+                                        {it.quantity || it.qty}x {it.item_name || it.name}
+                                      </span>
+                                      {isParcel && (
+                                        <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-orange-600 text-white uppercase tracking-wider inline-flex items-center shadow-xs">
+                                          📦 Parcel
+                                        </span>
+                                      )}
+                                    </div>
                                     <span className="text-[10px] text-[#8D6E63] font-mono">
                                       ₹{it.subtotal} (₹{it.unit_price || it.unitPrice} each)
                                     </span>
                                   </div>
                                 </div>
 
-                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider flex-shrink-0 flex items-center space-x-1 ${
-                                  isDelivered
-                                    ? 'bg-emerald-200/90 text-emerald-900 border border-emerald-300'
-                                    : 'bg-amber-100 text-amber-900 border border-amber-200'
-                                }`}>
-                                  {isDelivered ? (
-                                    <>
-                                      <Check className="w-3 h-3 stroke-[3]" />
-                                      <span>Delivered</span>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Clock className="w-3 h-3" />
-                                      <span>Pending</span>
-                                    </>
-                                  )}
-                                </span>
+                                {/* Right Side: Status Badge & Parcel P Button */}
+                                <div className="flex items-center space-x-1.5 flex-shrink-0">
+                                  {/* Status badge: Delivered or Pending */}
+                                  <span 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (it.id) handleToggleItemDelivery(order.id, it.id, !isDelivered);
+                                    }}
+                                    className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider flex-shrink-0 flex items-center space-x-1 cursor-pointer ${
+                                    isDelivered
+                                      ? 'bg-emerald-200/90 text-emerald-900 border border-emerald-300'
+                                      : 'bg-amber-100 text-amber-900 border border-amber-200'
+                                  }`}>
+                                    {isDelivered ? (
+                                      <>
+                                        <Check className="w-3 h-3 stroke-[3]" />
+                                        <span>Delivered</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Clock className="w-3 h-3" />
+                                        <span>Pending</span>
+                                      </>
+                                    )}
+                                  </span>
+
+                                  {/* P Button for Parcel (like the complete checkbox) */}
+                                  <button
+                                    type="button"
+                                    title={isParcel ? "Parcel / Takeaway (Click to switch to Dine-in)" : "Dine-in (Click to mark as Parcel)"}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (it.id) {
+                                        handleToggleItemParcel(order.id, it.id, !isParcel);
+                                      }
+                                    }}
+                                    className={`min-w-[32px] min-h-[32px] w-8 h-8 rounded-lg flex items-center justify-center font-black text-xs transition-all active:scale-95 border ${
+                                      isParcel
+                                        ? 'bg-orange-600 border-orange-700 text-white shadow-xs'
+                                        : 'bg-[#FAF3E0] border-[#D7CCC8] text-[#8D493A] hover:bg-amber-100 hover:border-amber-400'
+                                    }`}
+                                  >
+                                    P
+                                  </button>
+                                </div>
                               </div>
                             );
                           })}
@@ -679,70 +859,142 @@ export const Reception: React.FC = () => {
         </div>
       )}
 
-      {/* Tab 3: Settled Orders Queue */}
+      {/* Tab 3: Settled Orders Queue - Grouped by Date (Today upper, previous dates lower) */}
       {activeTab === 'settled' && (
-        <div data-testid="settled-queue" className="flex-1 p-3 space-y-3 pb-8">
+        <div data-testid="settled-queue" className="flex-1 p-3 space-y-4 pb-8">
           <div className="flex justify-between items-center mb-1">
-            <h2 className="text-sm font-bold text-[#3E2723]">
-              Today's Settled Orders ({settledOrders.length})
-            </h2>
+            <div>
+              <h2 className="text-sm font-bold text-[#3E2723]">
+                Settled Orders History ({settledOrders.length})
+              </h2>
+              <span className="text-[11px] text-[#8D6E63]">
+                Divided by date • Today stays at top
+              </span>
+            </div>
             <button
               onClick={loadOrders}
-              className="text-xs text-[#5D4037] hover:text-[#3E2723] flex items-center space-x-1"
+              className="text-xs text-[#5D4037] hover:text-[#3E2723] flex items-center space-x-1 bg-white px-2.5 py-1.5 rounded-xl border border-[#D7CCC8]"
             >
               <RefreshCw className="w-3.5 h-3.5" />
               <span>Refresh</span>
             </button>
           </div>
 
-          <div className="space-y-3">
+          <div className="space-y-4">
             {settledOrders.length === 0 ? (
               <div className="p-8 text-center bg-white rounded-2xl border border-[#EADCC8] text-xs text-[#8D6E63]">
-                No settled orders recorded for today yet.
+                No settled orders recorded yet.
               </div>
             ) : (
-              settledOrders.map((order) => {
-                const orderNum = order.daily_order_number || order.dailyOrderNumber || order.order_number || 1;
-                const total = order.total_amount || order.totalAmount || 0;
-                const payment = order.payment_method || order.paymentMethod || 'Cash';
-                const items = order.items || [];
+              groupOrdersByDateKey(settledOrders).map((group) => {
+                const todayKey = getTodayDateKey();
+                const isToday = group.dateKey === todayKey;
+                const formattedDate = formatReadableDate(group.dateKey);
 
                 return (
-                  <div
-                    key={order.id}
-                    data-testid={`order-card-${order.id}`}
-                    className="order-card p-4 rounded-2xl bg-white border border-[#EADCC8] shadow-sm flex flex-col justify-between space-y-2 opacity-90"
-                  >
-                    <div className="flex justify-between items-center border-b border-[#F5EBE1] pb-2">
-                      <div className="flex items-baseline space-x-2">
-                        <span className="text-xl font-bold text-[#3E2723]">
-                          #{orderNum}
-                        </span>
-                        <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-                          Settled
-                        </span>
+                  <div key={group.dateKey} className="space-y-2.5">
+                    {/* Date Division Banner */}
+                    <div className={`p-2.5 rounded-xl border flex items-center justify-between shadow-xs sticky top-0 z-10 ${
+                      isToday
+                        ? 'bg-amber-100/95 border-amber-300 text-amber-950 backdrop-blur-sm'
+                        : 'bg-[#EADCC8]/90 border-[#D7CCC8] text-[#3E2723] backdrop-blur-sm'
+                    }`}>
+                      <div className="flex items-center space-x-2">
+                        <Calendar className="w-4 h-4 text-[#8D493A] flex-shrink-0" />
+                        <div>
+                          <div className="flex items-center space-x-1.5">
+                            <span className="text-xs font-black uppercase tracking-wide block leading-tight">
+                              {isToday ? `Today • ${formattedDate}` : formattedDate}
+                            </span>
+                            {isToday && (
+                              <span className="text-[9px] font-black px-1.5 py-0.2 rounded-full bg-emerald-700 text-white uppercase">
+                                Current
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[10px] text-[#8D6E63]">
+                            {group.orders.length} {group.orders.length === 1 ? 'order' : 'orders'} settled
+                          </span>
+                        </div>
                       </div>
+
                       <div className="text-right">
-                        <span className="text-sm font-bold text-[#3E2723]">
-                          ₹{total}
+                        <span className="text-xs font-black text-[#3E2723] block leading-tight">
+                          ₹{group.totalAmount}
                         </span>
-                        <span className="block text-[10px] text-[#8D6E63]">
-                          {payment}
+                        <span className="text-[9px] uppercase tracking-wider text-[#8D6E63] font-bold">
+                          Daily Total
                         </span>
                       </div>
                     </div>
 
-                    <div className="space-y-0.5 text-xs text-[#5D4037]">
-                      {items.map((it, idx) => (
-                        <div key={idx} className="flex justify-between items-center text-[11px]">
-                          <span>
-                            {it.quantity}x {it.item_name || it.name}
-                          </span>
-                          <span className="font-mono">
-                            ₹{it.subtotal}
-                          </span>
-                        </div>
-                      ))}
+                    {/* Orders for this date */}
+                    <div className="space-y-2">
+                      {group.orders.map((order) => {
+                        const orderNum = order.daily_order_number || order.dailyOrderNumber || order.order_number || 1;
+                        const total = order.total_amount || order.totalAmount || 0;
+                        const payment = order.payment_method || order.paymentMethod || 'Cash';
+                        const items = order.items || [];
+                        const settledTime = order.settled_at || order.settledAt || order.created_at || order.createdAt;
+                        const timeStr = settledTime
+                          ? new Date(settledTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                          : '';
+
+                        return (
+                          <div
+                            key={order.id}
+                            data-testid={`order-card-${order.id}`}
+                            className="order-card p-3.5 rounded-2xl bg-white border border-[#EADCC8] shadow-xs flex flex-col justify-between space-y-2 opacity-95 hover:opacity-100 transition-opacity"
+                          >
+                            <div className="flex justify-between items-center border-b border-[#F5EBE1] pb-2">
+                              <div className="flex items-baseline space-x-2">
+                                <span className="text-xl font-black text-[#3E2723]">
+                                  #{orderNum}
+                                </span>
+                                <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                  Settled
+                                </span>
+                                {timeStr && (
+                                  <span className="text-[10px] text-[#8D6E63] font-mono">
+                                    {timeStr}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-right">
+                                <span className="text-sm font-black text-[#3E2723]">
+                                  ₹{total}
+                                </span>
+                                <span className="block text-[10px] text-[#8D6E63]">
+                                  via {payment}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="space-y-1 text-xs text-[#5D4037]">
+                              {items.map((it, idx) => {
+                                const itIsParcel = Boolean(it.is_parcel || it.isParcel);
+                                return (
+                                  <div key={idx} className="flex justify-between items-center text-[11px]">
+                                    <div className="flex items-center space-x-1.5 min-w-0 pr-2">
+                                      <span className="font-semibold truncate">
+                                        {it.quantity}x {it.item_name || it.name}
+                                      </span>
+                                      {itIsParcel && (
+                                        <span className="text-[8px] font-black px-1 rounded bg-orange-600 text-white uppercase flex-shrink-0">
+                                          Parcel
+                                        </span>
+                                      )}
+                                    </div>
+                                    <span className="font-mono text-[#8D6E63] flex-shrink-0">
+                                      ₹{it.subtotal}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 );
@@ -805,10 +1057,34 @@ export const Reception: React.FC = () => {
                     {editItems.map((item, idx) => (
                       <div key={idx} className="flex justify-between items-center bg-[#FAF3E0] p-2 rounded-xl text-xs border border-[#EADCC8]">
                         <div className="flex-1 pr-2">
-                          <p className="font-bold text-[#3E2723] leading-tight">{item.name}</p>
+                          <div className="flex items-center space-x-1.5 flex-wrap">
+                            <p className="font-bold text-[#3E2723] leading-tight">{item.name}</p>
+                            {item.isParcel && (
+                              <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-orange-600 text-white uppercase tracking-wider inline-flex items-center shadow-xs">
+                                📦 Parcel
+                              </span>
+                            )}
+                          </div>
                           <p className="text-[10px] text-[#8D493A]">₹{item.unitPrice} each • Subtotal: ₹{item.unitPrice * item.quantity}</p>
                         </div>
                         <div className="flex items-center space-x-1.5">
+                          {/* P Button for Parcel in Edit Modal */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next = [...editItems];
+                              next[idx].isParcel = !next[idx].isParcel;
+                              setEditItems(next);
+                            }}
+                            title={item.isParcel ? 'Parcel / Takeaway (Click for Dine-in)' : 'Dine-in (Click for Parcel)'}
+                            className={`w-9 h-9 min-w-[36px] min-h-[36px] rounded-lg font-black text-xs flex items-center justify-center transition-all ${
+                              item.isParcel
+                                ? 'bg-orange-600 text-white shadow-xs'
+                                : 'bg-white border border-[#D7CCC8] text-[#8D493A] hover:bg-amber-50'
+                            }`}
+                          >
+                            P
+                          </button>
                           <button
                             type="button"
                             onClick={() => {

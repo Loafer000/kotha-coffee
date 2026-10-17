@@ -7,6 +7,7 @@ interface CartItem {
   name: string;
   price: number;
   quantity: number;
+  isParcel?: boolean;
 }
 
 interface OrderCreateProps {
@@ -24,6 +25,7 @@ export const OrderCreate: React.FC<OrderCreateProps> = ({ onOrderPlaced }) => {
 
   // Cart state
   const [cart, setCart] = useState<Map<string, CartItem>>(new Map());
+  const [isParcelOrder, setIsParcelOrder] = useState<boolean>(false);
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'UPI' | 'Card'>('Cash');
   const [notes, setNotes] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
@@ -108,7 +110,8 @@ export const OrderCreate: React.FC<OrderCreateProps> = ({ onOrderPlaced }) => {
           menuItemId: item.menuItemId,
           name: item.name,
           unitPrice: item.price,
-          quantity: item.quantity
+          quantity: item.quantity,
+          isParcel: isParcelOrder || Boolean(item.isParcel)
         })),
         paymentMethod,
         notes: notes.trim() || undefined
@@ -117,6 +120,7 @@ export const OrderCreate: React.FC<OrderCreateProps> = ({ onOrderPlaced }) => {
       const createdOrder = await createOrder(payload);
       // Reset cart and notify
       setCart(new Map());
+      setIsParcelOrder(false);
       setNotes('');
       onOrderPlaced(createdOrder);
     } catch (err: any) {
@@ -251,7 +255,23 @@ export const OrderCreate: React.FC<OrderCreateProps> = ({ onOrderPlaced }) => {
 
       {/* Sticky Bottom Order Bar */}
       <div className="fixed bottom-0 left-0 right-0 z-30 flex justify-center pointer-events-none">
-        <div className="w-full max-w-[420px] bg-white border-t border-[#EADCC8] p-3 shadow-2xl pointer-events-auto">
+        <div className="w-full max-w-[420px] bg-white border-t border-[#EADCC8] p-3 shadow-2xl pointer-events-auto space-y-2">
+          {/* Quick Parcel / Takeaway Toggle */}
+          {cartItems.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setIsParcelOrder(!isParcelOrder)}
+              className={`w-full py-1.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5 border shadow-xs ${
+                isParcelOrder
+                  ? 'bg-orange-600 text-white border-orange-700'
+                  : 'bg-[#FAF3E0] text-[#8D493A] border-[#D7CCC8] hover:bg-[#EADCC8]'
+              }`}
+            >
+              <span>📦</span>
+              <span>{isParcelOrder ? '✓ Entire Order Marked as Parcel / Takeaway' : 'Tap to mark order as Parcel / Takeaway'}</span>
+            </button>
+          )}
+
           {/* Cart Summary & Submit Button */}
           <div className="flex items-center space-x-2">
             <div className="flex-1 bg-[#FAF3E0] rounded-xl px-3 py-2 border border-[#EADCC8] flex flex-col justify-center">

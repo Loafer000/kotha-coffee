@@ -16,6 +16,8 @@ export interface OrderItemInput {
   price?: number;
   quantity?: number;
   qty?: number;
+  isParcel?: boolean;
+  is_parcel?: boolean;
 }
 
 export interface CreateOrderInput {
@@ -48,6 +50,8 @@ export interface OrderItemRecord {
   subtotal: number;
   is_delivered: boolean;
   isDelivered?: boolean;
+  is_parcel: boolean;
+  isParcel?: boolean;
   created_at: string;
   createdAt?: string;
 }
@@ -97,6 +101,8 @@ function formatOrderResponse(row: any, items: any[]): OrderRecord {
     subtotal: Number(it.subtotal),
     is_delivered: Boolean(it.is_delivered),
     isDelivered: Boolean(it.is_delivered),
+    is_parcel: Boolean(it.is_parcel),
+    isParcel: Boolean(it.is_parcel),
     created_at: String(it.created_at),
     createdAt: String(it.created_at)
   }));
@@ -138,6 +144,7 @@ async function processOrderItems(rawItems: any[], db: any): Promise<{
     unitPrice: number;
     quantity: number;
     subtotal: number;
+    isParcel?: boolean;
   }>;
   totalAmount: number;
 }> {
@@ -202,12 +209,15 @@ async function processOrderItems(rawItems: any[], db: any): Promise<{
     const subtotal = Math.round(unitPrice * qty * 100) / 100;
     totalAmount += subtotal;
 
+    const isParcel = Boolean(raw.isParcel || raw.is_parcel);
+
     processedItems.push({
       menuItemId: menuItemId ? String(menuItemId) : null,
       itemName,
       unitPrice,
       quantity: qty,
-      subtotal
+      subtotal,
+      isParcel
     });
   }
 
@@ -315,9 +325,10 @@ router.post('/', requireReceptionAuth, async (req: AuthenticatedRequest, res: Re
     const insertedItems: any[] = [];
     for (const item of processedItems) {
       const lineItemId = `item_${crypto.randomUUID()}`;
+      const parcelFlag = item.isParcel ? 1 : 0;
       await db.execute({
-        sql: `INSERT INTO order_items (id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?);`,
+        sql: `INSERT INTO order_items (id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, is_parcel, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?);`,
         args: [
           lineItemId,
           orderId,
@@ -326,6 +337,7 @@ router.post('/', requireReceptionAuth, async (req: AuthenticatedRequest, res: Re
           item.unitPrice,
           item.quantity,
           item.subtotal,
+          parcelFlag,
           nowIso
         ]
       });
@@ -339,6 +351,7 @@ router.post('/', requireReceptionAuth, async (req: AuthenticatedRequest, res: Re
         quantity: item.quantity,
         subtotal: item.subtotal,
         is_delivered: 0,
+        is_parcel: parcelFlag,
         created_at: nowIso
       });
     }
@@ -391,11 +404,16 @@ router.get('/', requireReceptionAuth, async (req: AuthenticatedRequest, res: Res
       args.push(status.trim().toUpperCase());
     }
 
+    const isPending = status && String(status).toUpperCase() === 'PENDING';
+    const sortClause = isPending
+      ? 'ORDER BY date_key DESC, daily_order_number ASC, created_at ASC'
+      : 'ORDER BY date_key DESC, settled_at DESC, daily_order_number DESC, created_at DESC';
+
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const sql = `SELECT id, date_key, daily_order_number, status, payment_method, total_amount, notes, created_at, settled_at, updated_at
                  FROM orders
                  ${whereClause}
-                 ORDER BY daily_order_number ASC, created_at ASC;`;
+                 ${sortClause};`;
 
     const ordersRes = await db.execute({ sql, args });
     const orderRows = ordersRes.rows || [];
@@ -407,7 +425,7 @@ router.get('/', requireReceptionAuth, async (req: AuthenticatedRequest, res: Res
     // Fetch line items for these orders
     const placeholders = orderRows.map(() => '?').join(',');
     const itemsRes = await db.execute({
-      sql: `SELECT id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, created_at
+      sql: `SELECT id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, is_parcel, created_at
             FROM order_items
             WHERE order_id IN (${placeholders})
             ORDER BY rowid ASC;`,
@@ -503,9 +521,10 @@ async function handleEditOrder(req: AuthenticatedRequest, res: Response) {
       // Insert updated line items
       for (const item of itemData.processedItems) {
         const lineItemId = `item_${crypto.randomUUID()}`;
+        const parcelFlag = item.isParcel ? 1 : 0;
         await db.execute({
-          sql: `INSERT INTO order_items (id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?);`,
+          sql: `INSERT INTO order_items (id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, is_parcel, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?);`,
           args: [
             lineItemId,
             orderId,
@@ -514,6 +533,7 @@ async function handleEditOrder(req: AuthenticatedRequest, res: Response) {
             item.unitPrice,
             item.quantity,
             item.subtotal,
+            parcelFlag,
             nowIso
           ]
         });
@@ -615,7 +635,7 @@ async function handleSettleOrder(req: AuthenticatedRequest, res: Response) {
       args: [orderId]
     });
     const itemsRes = await db.execute({
-      sql: `SELECT id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, created_at
+      sql: `SELECT id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, is_parcel, created_at
             FROM order_items WHERE order_id = ? ORDER BY rowid ASC;`,
       args: [orderId]
     });
@@ -639,7 +659,7 @@ async function fetchFullOrderById(orderId: string, db: any): Promise<OrderRecord
   });
   if (!orderRes.rows || orderRes.rows.length === 0) return null;
   const itemsRes = await db.execute({
-    sql: `SELECT id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, created_at
+    sql: `SELECT id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, is_parcel, created_at
           FROM order_items
           WHERE order_id = ?
           ORDER BY rowid ASC;`,
@@ -742,6 +762,103 @@ router.patch('/:orderId/deliver-all', async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('[API /api/orders/:orderId/deliver-all] Error:', err);
     return res.status(500).json({ error: err.message || 'Failed to update delivery status' });
+  }
+});
+
+/**
+ * PATCH /api/orders/:orderId/items/:itemId/parcel
+ * Toggles or sets parcel/takeaway status of an individual item in an order.
+ * Broadcasts 'order:updated' via SSE to keep Kitchen and Reception in real-time sync.
+ */
+router.patch('/:orderId/items/:itemId/parcel', async (req: Request, res: Response) => {
+  try {
+    const db = getDbClient();
+    const { orderId, itemId } = req.params;
+
+    const itemRes = await db.execute({
+      sql: `SELECT * FROM order_items WHERE id = ? AND order_id = ?;`,
+      args: [itemId, orderId]
+    });
+
+    if (!itemRes.rows || itemRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Order item not found' });
+    }
+
+    const currentItem = itemRes.rows[0];
+    let newStatus: number;
+    if (typeof req.body?.isParcel === 'boolean') {
+      newStatus = req.body.isParcel ? 1 : 0;
+    } else if (typeof req.body?.is_parcel === 'boolean') {
+      newStatus = req.body.is_parcel ? 1 : 0;
+    } else {
+      newStatus = Number(currentItem.is_parcel) === 1 ? 0 : 1;
+    }
+
+    await db.execute({
+      sql: `UPDATE order_items SET is_parcel = ? WHERE id = ?;`,
+      args: [newStatus, itemId]
+    });
+
+    const cafeReq = req as CafeRequest;
+    const nowIso = (cafeReq.cafeTime || getCafeNow(req)).toISOString();
+    await db.execute({
+      sql: `UPDATE orders SET updated_at = ? WHERE id = ?;`,
+      args: [nowIso, orderId]
+    });
+
+    const updatedOrder = await fetchFullOrderById(orderId, db);
+    if (updatedOrder) {
+      broadcastOrderEvent({ type: 'order:updated', order: updatedOrder });
+    }
+
+    return res.status(200).json({
+      success: true,
+      itemId,
+      isParcel: Boolean(newStatus),
+      is_parcel: Boolean(newStatus),
+      order: updatedOrder
+    });
+  } catch (err: any) {
+    console.error('[API /api/orders/:orderId/items/:itemId/parcel] Error:', err);
+    return res.status(500).json({ error: err.message || 'Failed to update item parcel status' });
+  }
+});
+
+/**
+ * PATCH /api/orders/:orderId/parcel-all
+ * Sets all items in an order as parcel or dine-in.
+ */
+router.patch('/:orderId/parcel-all', async (req: Request, res: Response) => {
+  try {
+    const db = getDbClient();
+    const { orderId } = req.params;
+    const isParcel = req.body?.isParcel !== false ? 1 : 0;
+
+    await db.execute({
+      sql: `UPDATE order_items SET is_parcel = ? WHERE order_id = ?;`,
+      args: [isParcel, orderId]
+    });
+
+    const cafeReq = req as CafeRequest;
+    const nowIso = (cafeReq.cafeTime || getCafeNow(req)).toISOString();
+    await db.execute({
+      sql: `UPDATE orders SET updated_at = ? WHERE id = ?;`,
+      args: [nowIso, orderId]
+    });
+
+    const updatedOrder = await fetchFullOrderById(orderId, db);
+    if (updatedOrder) {
+      broadcastOrderEvent({ type: 'order:updated', order: updatedOrder });
+    }
+
+    return res.status(200).json({
+      success: true,
+      isParcel: Boolean(isParcel),
+      order: updatedOrder
+    });
+  } catch (err: any) {
+    console.error('[API /api/orders/:orderId/parcel-all] Error:', err);
+    return res.status(500).json({ error: err.message || 'Failed to update parcel status' });
   }
 });
 

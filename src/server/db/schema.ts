@@ -54,6 +54,7 @@ export const SCHEMA_SQL = [
     quantity INTEGER NOT NULL,
     subtotal REAL NOT NULL,
     is_delivered INTEGER NOT NULL DEFAULT 0,
+    is_parcel INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
   );`,
 
@@ -81,6 +82,13 @@ export async function initSchema(customClient?: Client): Promise<void> {
   // Auto-migration: ensure is_delivered column exists in order_items for existing databases
   try {
     await db.execute(`ALTER TABLE order_items ADD COLUMN is_delivered INTEGER NOT NULL DEFAULT 0;`);
+  } catch {
+    // Column already exists or table was freshly created
+  }
+
+  // Auto-migration: ensure is_parcel column exists in order_items for existing databases
+  try {
+    await db.execute(`ALTER TABLE order_items ADD COLUMN is_parcel INTEGER NOT NULL DEFAULT 0;`);
   } catch {
     // Column already exists or table was freshly created
   }
