@@ -133,7 +133,7 @@ export const Reception: React.FC = () => {
 
   // Edit Order State
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
-  const [editItems, setEditItems] = useState<Array<{ name: string; unitPrice: number; quantity: number; isParcel?: boolean }>>([]);
+  const [editItems, setEditItems] = useState<Array<{ id?: string; name: string; unitPrice: number; quantity: number; isParcel?: boolean; isDelivered?: boolean }>>([]);
   const [editPayment, setEditPayment] = useState<'Cash' | 'UPI' | 'Card'>('Cash');
   const [editNotes, setEditNotes] = useState<string>('');
   const [editSaving, setEditSaving] = useState<boolean>(false);
@@ -343,24 +343,29 @@ export const Reception: React.FC = () => {
     setEditCategoryFilter('All');
     setEditItems(
       (order.items || []).map((it) => ({
+        id: it.id,
         name: it.item_name || it.name,
         unitPrice: Number(it.unit_price || it.unitPrice || 0),
         quantity: Number(it.quantity || it.qty || 1),
-        isParcel: Boolean(it.is_parcel || it.isParcel)
+        isParcel: Boolean(it.is_parcel || it.isParcel),
+        isDelivered: Boolean(it.is_delivered || it.isDelivered)
       }))
     );
   };
 
   const handleAddItemToEdit = (menuItem: MenuItem) => {
-    setEditItems((prev) => {
-      const idx = prev.findIndex((it) => it.name.toLowerCase() === menuItem.name.toLowerCase());
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx].quantity += 1;
-        return next;
+    // Append as an individual new line item so previously delivered items stay separated and checked
+    setEditItems((prev) => [
+      ...prev,
+      {
+        id: undefined,
+        name: menuItem.name,
+        unitPrice: menuItem.price,
+        quantity: 1,
+        isParcel: false,
+        isDelivered: false
       }
-      return [...prev, { name: menuItem.name, unitPrice: menuItem.price, quantity: 1, isParcel: false }];
-    });
+    ]);
   };
 
   const handleRemoveItemFromEdit = (index: number) => {
@@ -376,10 +381,13 @@ export const Reception: React.FC = () => {
         paymentMethod: editPayment,
         notes: editNotes.trim() || undefined,
         items: editItems.map((it) => ({
+          id: it.id,
           name: it.name,
           unitPrice: it.unitPrice,
           quantity: it.quantity,
-          isParcel: it.isParcel
+          isParcel: it.isParcel,
+          isDelivered: it.isDelivered,
+          is_delivered: it.isDelivered
         }))
       };
       await updateOrder(editingOrder.id, payload, token);
@@ -1064,6 +1072,33 @@ export const Reception: React.FC = () => {
                                 📦 Parcel
                               </span>
                             )}
+                            {/* Clickable delivery status badge */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = [...editItems];
+                                next[idx].isDelivered = !next[idx].isDelivered;
+                                setEditItems(next);
+                              }}
+                              title={item.isDelivered ? 'Delivered (click to mark Pending)' : 'Pending (click to mark Delivered)'}
+                              className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase tracking-wider flex items-center space-x-0.5 border transition-all ${
+                                item.isDelivered
+                                  ? 'bg-emerald-100 border-emerald-300 text-emerald-900 shadow-xs'
+                                  : 'bg-amber-100 border-amber-300 text-amber-900'
+                              }`}
+                            >
+                              {item.isDelivered ? (
+                                <>
+                                  <Check className="w-2.5 h-2.5 stroke-[2.5]" />
+                                  <span>Delivered</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Clock className="w-2.5 h-2.5" />
+                                  <span>Pending</span>
+                                </>
+                              )}
+                            </button>
                           </div>
                           <p className="text-[10px] text-[#8D493A]">₹{item.unitPrice} each • Subtotal: ₹{item.unitPrice * item.quantity}</p>
                         </div>
@@ -1174,7 +1209,9 @@ export const Reception: React.FC = () => {
                       return matchesCat && matchesSearch;
                     })
                     .map((item) => {
-                      const alreadyIn = editItems.find((it) => it.name.toLowerCase() === item.name.toLowerCase());
+                      const countInOrder = editItems
+                        .filter((it) => it.name.toLowerCase() === item.name.toLowerCase())
+                        .reduce((sum, it) => sum + it.quantity, 0);
                       return (
                         <div 
                           key={item.id}
@@ -1191,7 +1228,7 @@ export const Reception: React.FC = () => {
                             className="min-h-[36px] px-3 py-1 bg-[#FAF3E0] hover:bg-[#3E2723] hover:text-[#FFF8E7] text-[#3E2723] font-bold text-xs rounded-xl border border-[#D7CCC8] transition-all flex items-center space-x-1 active:scale-95 shadow-sm"
                           >
                             <Plus className="w-3.5 h-3.5" />
-                            <span>{alreadyIn ? `+1 (${alreadyIn.quantity})` : 'Add'}</span>
+                            <span>{countInOrder > 0 ? `+ Add (${countInOrder} in order)` : '+ Add'}</span>
                           </button>
                         </div>
                       );

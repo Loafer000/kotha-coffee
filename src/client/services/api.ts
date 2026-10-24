@@ -229,11 +229,14 @@ export interface Order {
 }
 
 export interface CreateOrderItemInput {
+  id?: string;
   menuItemId?: string;
   name?: string;
   unitPrice?: number;
   quantity: number;
   isParcel?: boolean;
+  isDelivered?: boolean;
+  is_delivered?: boolean;
 }
 
 export interface CreateOrderInput {

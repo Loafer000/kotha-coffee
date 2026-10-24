@@ -18,6 +18,8 @@ export interface OrderItemInput {
   qty?: number;
   isParcel?: boolean;
   is_parcel?: boolean;
+  isDelivered?: boolean;
+  is_delivered?: boolean;
 }
 
 export interface CreateOrderInput {
@@ -139,12 +141,14 @@ function formatOrderResponse(row: any, items: any[]): OrderRecord {
  */
 async function processOrderItems(rawItems: any[], db: any): Promise<{
   processedItems: Array<{
+    id?: string;
     menuItemId: string | null;
     itemName: string;
     unitPrice: number;
     quantity: number;
     subtotal: number;
     isParcel?: boolean;
+    isDelivered?: boolean;
   }>;
   totalAmount: number;
 }> {
@@ -210,14 +214,18 @@ async function processOrderItems(rawItems: any[], db: any): Promise<{
     totalAmount += subtotal;
 
     const isParcel = Boolean(raw.isParcel || raw.is_parcel);
+    const isDelivered = Boolean(raw.isDelivered ?? raw.is_delivered ?? false);
+    const id = raw.id ? String(raw.id) : undefined;
 
     processedItems.push({
+      id,
       menuItemId: menuItemId ? String(menuItemId) : null,
       itemName,
       unitPrice,
       quantity: qty,
       subtotal,
-      isParcel
+      isParcel,
+      isDelivered
     });
   }
 
@@ -512,6 +520,16 @@ async function handleEditOrder(req: AuthenticatedRequest, res: Response) {
 
       newTotal = itemData.totalAmount;
 
+      // Fetch existing line items to preserve delivery status if needed
+      const existingItemsRes = await db.execute({
+        sql: `SELECT id, item_name, is_delivered, is_parcel FROM order_items WHERE order_id = ? ORDER BY rowid ASC;`,
+        args: [orderId]
+      });
+      const existingById = new Map<string, any>();
+      for (const row of existingItemsRes.rows || []) {
+        existingById.set(String(row.id), row);
+      }
+
       // Delete existing line items
       await db.execute({
         sql: `DELETE FROM order_items WHERE order_id = ?;`,
@@ -520,11 +538,19 @@ async function handleEditOrder(req: AuthenticatedRequest, res: Response) {
 
       // Insert updated line items
       for (const item of itemData.processedItems) {
-        const lineItemId = `item_${crypto.randomUUID()}`;
+        const lineItemId = item.id || `item_${crypto.randomUUID()}`;
         const parcelFlag = item.isParcel ? 1 : 0;
+
+        // Preserve delivery status if explicitly set, or if existing item in DB was delivered
+        let isDelivered = Boolean(item.isDelivered);
+        if (!isDelivered && item.id && existingById.has(item.id)) {
+          isDelivered = Boolean(existingById.get(item.id).is_delivered);
+        }
+        const deliveredFlag = isDelivered ? 1 : 0;
+
         await db.execute({
           sql: `INSERT INTO order_items (id, order_id, menu_item_id, item_name, unit_price, quantity, subtotal, is_delivered, is_parcel, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?);`,
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
           args: [
             lineItemId,
             orderId,
@@ -533,6 +559,7 @@ async function handleEditOrder(req: AuthenticatedRequest, res: Response) {
             item.unitPrice,
             item.quantity,
             item.subtotal,
+            deliveredFlag,
             parcelFlag,
             nowIso
           ]
